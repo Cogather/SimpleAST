@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific - Test projects
+example_project/
+projects/
+
+# Project specific - Output files
+output/
+logs/
+*.log
+
+# Project specific - Analysis results
+analysis_result.json
+test_output.json
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+.cache/
+
+# Compressed files
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+*.bz2
+*.xz
+*.tar.gz
+*.tgz
+
+# OS generated files
+Thumbs.db
+Desktop.ini
+
+.claude/
+
+nul

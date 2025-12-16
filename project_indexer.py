@@ -58,26 +58,26 @@ class ProjectIndexer:
 
     def _index_file(self, file_path: Path):
         """Index symbols in a single file."""
+        # Try multiple encodings
+        source_code = None
+        encodings_to_try = ['utf-8', 'gbk', 'gb2312', 'latin-1', 'cp1252']
+
+        for encoding in encodings_to_try:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    f.read()  # Test if encoding works
+                # If successful, read as bytes for tree-sitter
+                with open(file_path, 'rb') as f:
+                    source_code = f.read()
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+
+        if source_code is None:
+            print(f"Warning: Could not decode {file_path} with any supported encoding")
+            return
+
         try:
-            # Try multiple encodings
-            source_code = None
-            encodings_to_try = ['utf-8', 'gbk', 'gb2312', 'latin-1', 'cp1252']
-
-            for encoding in encodings_to_try:
-                try:
-                    with open(file_path, 'r', encoding=encoding) as f:
-                        f.read()  # Test if encoding works
-                    # If successful, read as bytes for tree-sitter
-                    with open(file_path, 'rb') as f:
-                        source_code = f.read()
-                    break
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-
-            if source_code is None:
-                print(f"Warning: Could not decode {file_path} with any supported encoding")
-                return
-
             tree = self.parser.parse_file(str(file_path))
             if not tree:
                 return

@@ -67,7 +67,18 @@ class CppParser:
     @staticmethod
     def get_node_text(node: Node, source_code: bytes) -> str:
         """Extract text content from a node."""
-        return source_code[node.start_byte:node.end_byte].decode('utf8')
+        # Try UTF-8 first, fall back to ignore/replace for other encodings
+        try:
+            return source_code[node.start_byte:node.end_byte].decode('utf8')
+        except UnicodeDecodeError:
+            # Try common encodings
+            for encoding in ['gbk', 'gb2312', 'latin-1']:
+                try:
+                    return source_code[node.start_byte:node.end_byte].decode(encoding)
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            # Last resort: decode with errors='replace'
+            return source_code[node.start_byte:node.end_byte].decode('utf8', errors='replace')
 
     @staticmethod
     def find_nodes_by_type(node: Node, node_type: str) -> list:
@@ -142,7 +153,18 @@ class CppParser:
             if body:
                 signature_end = body.start_byte
                 signature_start = func_node.start_byte
-                signature = source_code[signature_start:signature_end].decode('utf8').strip()
+                # Use get_node_text helper for consistent encoding handling
+                try:
+                    signature = source_code[signature_start:signature_end].decode('utf8').strip()
+                except UnicodeDecodeError:
+                    for encoding in ['gbk', 'gb2312', 'latin-1']:
+                        try:
+                            signature = source_code[signature_start:signature_end].decode(encoding).strip()
+                            break
+                        except (UnicodeDecodeError, LookupError):
+                            continue
+                    else:
+                        signature = source_code[signature_start:signature_end].decode('utf8', errors='replace').strip()
                 return signature
 
         # For declarations, return full text

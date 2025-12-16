@@ -183,13 +183,14 @@ class CppProjectAnalyzer:
         self.indexer.index_project()
         print("Indexing complete!")
 
-    def analyze_file(self, target_file: str, trace_depth: int = 10) -> AnalysisResult:
+    def analyze_file(self, target_file: str, trace_depth: int = 10, target_function: Optional[str] = None) -> AnalysisResult:
         """
         Analyze a specific C++ file.
 
         Args:
             target_file: Path to the target .cpp file (relative to project root or absolute)
             trace_depth: Maximum depth for call chain tracing
+            target_function: Optional. If specified, only analyze this function
 
         Returns:
             AnalysisResult containing all analysis data
@@ -202,13 +203,27 @@ class CppProjectAnalyzer:
             rel_path = str(target_path)
 
         print(f"\nAnalyzing file: {rel_path}")
+        if target_function:
+            print(f"Target function: {target_function}")
 
         # Set trace depth
         self.tracer.max_depth = trace_depth
 
         # Step 1: Classify entry points
         print("Step 1: Identifying entry point functions...")
-        entry_points = self.classifier.classify_file_functions(rel_path)
+        all_entry_points = self.classifier.classify_file_functions(rel_path)
+
+        # Filter to target function if specified
+        if target_function:
+            entry_points = [ep for ep in all_entry_points if ep.name == target_function]
+            if not entry_points:
+                print(f"  Warning: Function '{target_function}' not found in file!")
+                print(f"  Available functions: {', '.join([ep.name for ep in all_entry_points[:10]])}")
+                if len(all_entry_points) > 10:
+                    print(f"  ... and {len(all_entry_points) - 10} more")
+        else:
+            entry_points = all_entry_points
+
         print(f"  Found {len(entry_points)} entry point functions")
 
         # Step 2: Trace call chains

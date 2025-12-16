@@ -30,16 +30,29 @@ def main():
     global log_file
 
     if len(sys.argv) < 3:
-        print("用法: python analyze.py <项目根目录> <目标CPP文件> [追踪深度]")
+        print("用法: python analyze.py <项目根目录> <目标CPP文件> [追踪深度] [函数名]")
+        print()
+        print("参数说明:")
+        print("  项目根目录  - C++项目的根目录")
+        print("  目标CPP文件 - 要分析的.cpp文件（相对或绝对路径）")
+        print("  追踪深度    - 可选，函数调用链追踪深度（默认10）")
+        print("  函数名      - 可选，只分析指定的函数（默认分析文件中所有函数）")
         print()
         print("示例:")
+        print("  # 分析整个文件")
         print("  python analyze.py ./example_project ./example_project/src/main.cpp")
+        print()
+        print("  # 分析整个文件，追踪深度15")
         print("  python analyze.py D:\\my_project src\\main.cpp 15")
+        print()
+        print("  # 只分析指定函数")
+        print("  python analyze.py ./project main.cpp 10 MyFunction")
         sys.exit(1)
 
     project_root = sys.argv[1]
     target_file = sys.argv[2]
     trace_depth = int(sys.argv[3]) if len(sys.argv) > 3 else 10
+    target_function = sys.argv[4] if len(sys.argv) > 4 else None
 
     # 创建日志目录
     log_dir = Path("logs")
@@ -71,6 +84,10 @@ def main():
     log(f"项目根目录: {project_root}")
     log(f"目标文件: {target_file}")
     log(f"追踪深度: {trace_depth}")
+    if target_function:
+        log(f"目标函数: {target_function}")
+    else:
+        log(f"分析范围: 文件中所有函数")
     log("")
 
     try:
@@ -82,7 +99,7 @@ def main():
 
         # 分析文件
         log("步骤 2/4: 开始分析目标文件...")
-        result = analyzer.analyze_file(str(target_file), trace_depth=trace_depth)
+        result = analyzer.analyze_file(str(target_file), trace_depth=trace_depth, target_function=target_function)
         log("✓ 文件分析完成")
         log("")
 

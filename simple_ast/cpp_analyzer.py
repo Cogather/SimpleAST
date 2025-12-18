@@ -12,6 +12,7 @@ from .call_chain_tracer import CallChainTracer, CallNode
 from .data_structure_analyzer import DataStructureAnalyzer, DataStructureInfo
 from .analysis_modes import AnalysisMode, get_mode_config, AnalysisModeConfig
 from .single_file_analyzer import SingleFileAnalyzer, FileBoundary
+from .branch_analyzer import BranchAnalyzer, format_branch_analysis
 
 
 @dataclass
@@ -24,6 +25,7 @@ class AnalysisResult:
     data_structures: Dict[str, DataStructureInfo]
     mode: str = "full_project"  # 分析模式
     file_boundary: Optional[FileBoundary] = None  # 单文件边界信息（仅在 single_file_boundary 模式）
+    branch_analyses: Dict[str, 'BranchAnalysis'] = None  # 函数分支分析结果（func_name -> BranchAnalysis）
 
     def format_report(self) -> str:
         """Format the complete analysis as a readable report."""
@@ -603,6 +605,12 @@ class AnalysisResult:
         lines.append(f"需要Mock外部函数: {len(all_external_deps)} 个")
         lines.append("")
 
+        # === 3.5 分支复杂度分析（仅当圈复杂度>5时） ===
+        if hasattr(self, 'branch_analyses') and self.branch_analyses and func_name in self.branch_analyses:
+            branch_analysis = self.branch_analyses[func_name]
+            if branch_analysis.cyclomatic_complexity > 5:
+                lines.append(format_branch_analysis(branch_analysis))
+
         # === 4. Mock 清单 ===
         if all_external_deps:
             lines.append("[Mock清单]")
@@ -648,14 +656,31 @@ class AnalysisResult:
 
             if internal_ds or external_ds:
                 lines.append("[数据结构]")
-
-                if internal_ds:
-                    lines.append(f"内部: {', '.join(sorted(internal_ds))}")
-
-                if external_ds:
-                    lines.append(f"外部: {', '.join(sorted(external_ds))}")
-
                 lines.append("")
+
+                # 输出内部数据结构的完整定义
+                if internal_ds:
+                    lines.append("内部定义:")
+                    lines.append("")
+
+                    for ds in sorted(internal_ds):
+                        # 从 file_boundary 获取数据结构定义
+                        if self.file_boundary and hasattr(self.file_boundary, 'file_data_structures') and ds in self.file_boundary.file_data_structures:
+                            ds_info = self.file_boundary.file_data_structures[ds]
+                            lines.append(f">> {ds} ({ds_info['type']})")
+                            lines.append(f"定义: {self.target_file}:{ds_info['line']}")
+                            lines.append(ds_info['definition'])
+                            lines.append("")
+                        else:
+                            # 如果没有定义信息，只显示名称
+                            lines.append(f">> {ds}")
+                            lines.append("")
+
+                # 输出外部数据结构引用
+                if external_ds:
+                    lines.append("外部引用:")
+                    lines.append(f"{', '.join(sorted(external_ds))}")
+                    lines.append("")
 
         return "\n".join(lines)
 
@@ -770,6 +795,9 @@ class CppProjectAnalyzer:
             # 初始化单文件分析器
             self.single_file_analyzer = SingleFileAnalyzer(str(self.project_root))
 
+        # 分支分析器（所有模式都可用）
+        self.branch_analyzer = BranchAnalyzer()
+
     def analyze_file(self, target_file: str, trace_depth: int = 10, target_function: Optional[str] = None) -> AnalysisResult:
         """
         Analyze a specific C++ file.
@@ -857,6 +885,16 @@ class CppProjectAnalyzer:
         data_structures = self.single_file_analyzer.get_data_structures_info()
         print(f"  Found {len(data_structures)} data structures")
 
+        # 分析函数分支结构
+        print("Analyzing branch structures...")
+        branch_analyses = {}
+        for func_name in self.single_file_analyzer.file_functions.keys():
+            func_info = self.single_file_analyzer.file_functions[func_name]
+            func_node = func_info['node']
+            branch_analysis = self.branch_analyzer.analyze_function(func_node, source_code)
+            branch_analyses[func_name] = branch_analysis
+        print(f"  Analyzed {len(branch_analyses)} functions")
+
         # 创建结果
         result = AnalysisResult(
             target_file=str(target_path),
@@ -865,7 +903,8 @@ class CppProjectAnalyzer:
             function_signatures=function_signatures,
             data_structures=data_structures,
             mode=self.mode.value,
-            file_boundary=boundary
+            file_boundary=boundary,
+            branch_analyses=branch_analyses
         )
 
         print("\nBoundary analysis complete!")

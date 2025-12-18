@@ -30,6 +30,9 @@ class FileBoundary:
     # 文件路径
     file_path: str
 
+    # 数据结构详细信息 (name -> {node, type, line, definition})
+    file_data_structures: Dict[str, dict] = None
+
 
 class SingleFileAnalyzer:
     """单文件边界分析器 - 不需要全局索引"""
@@ -106,7 +109,8 @@ class SingleFileAnalyzer:
             external_functions=self.external_functions.copy(),
             internal_data_structures=self.internal_data_structures.copy(),
             external_data_structures=self.external_data_structures.copy(),
-            file_path=str(target_path)
+            file_path=str(target_path),
+            file_data_structures=self.file_data_structures.copy()
         )
 
         print("  Boundary analysis complete!")

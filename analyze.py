@@ -177,6 +177,12 @@ def main():
         file_name = Path(target_file).stem  # 不带扩展名
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+        # 统一创建输出目录
+        base_name = f"_{file_name}_{timestamp}"
+        result_dir = output_dir / base_name
+        result_dir.mkdir(exist_ok=True)
+        log(f"  输出目录: {result_dir.resolve()}")
+
         # 检查是否需要分层输出（单文件边界模式且函数数量 > 50）
         use_structured_output = False
         if mode.value == "single_file_boundary" and result.file_boundary:
@@ -186,25 +192,21 @@ def main():
                 log(f"  检测到大型文件（{func_count} 个函数），使用分层输出模式")
 
         if use_structured_output:
-            # 分层输出模式（简化版：无分类）
-            base_name = f"{project_name}_{file_name}_{timestamp}"
-            structured_dir = output_dir / base_name
-            structured_dir.mkdir(exist_ok=True)
-
+            # 分层输出模式
             # 1. 生成摘要报告（无分类信息）
-            summary_file = structured_dir / "summary.txt"
+            summary_file = result_dir / "summary.txt"
             log(f"  - 写入摘要报告: {summary_file}")
             with open(summary_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_simple_summary_report())
 
             # 2. 生成边界分析
-            boundary_file = structured_dir / "boundary.txt"
+            boundary_file = result_dir / "boundary.txt"
             log(f"  - 写入边界分析: {boundary_file}")
             with open(boundary_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_boundary_report())
 
             # 3. 生成每个函数的独立文件
-            functions_dir = structured_dir / "functions"
+            functions_dir = result_dir / "functions"
             functions_dir.mkdir(exist_ok=True)
 
             all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
@@ -216,19 +218,19 @@ def main():
                     f.write(result.generate_single_function_report(func_name))
 
             # 4. 生成调用链报告
-            call_chains_file = structured_dir / "call_chains.txt"
+            call_chains_file = result_dir / "call_chains.txt"
             log(f"  - 写入调用链: {call_chains_file}")
             with open(call_chains_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_call_chains_report())
 
             # 5. 生成数据结构报告
-            data_structures_file = structured_dir / "data_structures.txt"
+            data_structures_file = result_dir / "data_structures.txt"
             log(f"  - 写入数据结构: {data_structures_file}")
             with open(data_structures_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_data_structures_report())
 
             # 6. JSON 输出
-            json_file = structured_dir / "analysis.json"
+            json_file = result_dir / "analysis.json"
             log(f"  - 写入JSON数据: {json_file}")
             with open(json_file, 'w', encoding='utf-8') as f:
                 f.write(result.to_json())
@@ -237,7 +239,7 @@ def main():
             log("")
             log("=" * 80)
             log("✅ 分析完成!")
-            log(f"📁 输出目录: {structured_dir}")
+            log(f"📁 输出目录: {result_dir}")
             log(f"📊 摘要报告: {summary_file}")
             log(f"📋 边界分析: {boundary_file}")
             log(f"📁 函数文件: {functions_dir}/ ({len(all_functions)} 个)")
@@ -245,16 +247,15 @@ def main():
             log("=" * 80)
 
         else:
-            # 传统单文件输出模式
-            txt_file = output_dir / f"{project_name}_{file_name}_{timestamp}.txt"
-            json_file = output_dir / f"{project_name}_{file_name}_{timestamp}.json"
-
+            # 小文件输出模式 - 也使用目录结构
             # 保存文本报告
+            txt_file = result_dir / "analysis.txt"
             log(f"  - 写入文本报告: {txt_file}")
             with open(txt_file, 'w', encoding='utf-8') as f:
                 f.write(result.format_report())
 
             # 保存 JSON
+            json_file = result_dir / "analysis.json"
             log(f"  - 写入JSON数据: {json_file}")
             with open(json_file, 'w', encoding='utf-8') as f:
                 f.write(result.to_json())
@@ -263,6 +264,7 @@ def main():
             log("")
             log("=" * 80)
             log("✅ 分析完成!")
+            log(f"📁 输出目录: {result_dir}")
             log(f"📄 文本报告: {txt_file}")
             log(f"📊 JSON数据: {json_file}")
             log(f"📝 执行日志: {log_filename}")

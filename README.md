@@ -23,7 +23,7 @@ python analyze.py D:\my_project src\main.cpp
 
 ### 3. 查看结果
 
-结果自动保存到 `output/` 目录：
+结果自动保存到 `output/` 目录（可通过 `--output` 自定义）：
 
 **小型文件（≤50 个函数）**：
 - `*.txt` - 可读的分析报告
@@ -32,13 +32,12 @@ python analyze.py D:\my_project src\main.cpp
 **大型文件（>50 个函数）**：自动生成分层目录
 ```
 output/<项目>_<文件>_<时间>/
-├── summary.txt              # 📊 摘要报告（统计数据、模块分类）
+├── summary.txt              # 📊 摘要报告（统计数据、复杂度分析）
 ├── boundary.txt             # 📋 边界分析（内部/外部函数和数据结构）
-├── functions/               # 📁 按模块分类的函数详情
-│   ├── drawing.txt
-│   ├── font.txt
-│   ├── primitive.txt
-│   └── ...
+├── functions/               # 📁 每个函数的独立详情文件
+│   ├── AddCircle.txt        #     [主函数] 信息 + Mock清单 + 内部依赖
+│   ├── PrimRect.txt         #     完整测试上下文，递归展开所有依赖
+│   └── ...                  #     每个文件可独立用于单元测试生成
 ├── call_chains.txt          # 🔗 完整调用链
 ├── data_structures.txt      # 📦 数据结构详情
 └── analysis.json            # 📊 JSON格式数据
@@ -74,7 +73,9 @@ python analyze.py . main.cpp full
 - ✅ 数据结构依赖分析
 - ✅ 函数签名提取
 - ✅ 文件边界分析（内部/外部区分）
-- ✅ 智能分层输出（大型文件自动按模块分类）
+- ✅ 递归依赖展开（完整测试上下文生成）
+- ✅ 智能分层输出（大型文件自动拆分为独立函数文件）
+- ✅ 可配置输出目录（支持自定义输出路径）
 - ✅ 支持中文注释和多种编码（UTF-8/GBK/GB2312）
 
 ## 🎯 使用场景
@@ -84,16 +85,18 @@ python analyze.py . main.cpp full
 - 🔧 重构影响评估
 - 📊 代码审查辅助
 - 🗺️ 生成调用关系图
+- 🧪 单元测试准备（生成完整测试上下文和Mock清单）
 
 ## ⚙️ 参数说明
 
 ```bash
-python analyze.py <项目根目录> <目标文件> [模式] [深度] [函数名]
+python analyze.py <项目根目录> <目标文件> [模式] [深度] [函数名] [--output <输出目录>]
 ```
 
 - **模式**：`single`（默认）/ `full`
 - **深度**：调用链追踪深度（默认：根据模式自动设置）
 - **函数名**：只分析指定函数
+- **--output**：自定义输出目录（默认：`./output`）
 
 **示例：**
 ```bash
@@ -102,6 +105,10 @@ python analyze.py . main.cpp single 50 MyFunction
 
 # 完整项目模式，深度 15
 python analyze.py ./project src/api.cpp full 15
+
+# 自定义输出目录
+python analyze.py . main.cpp --output ./my_results
+python analyze.py . main.cpp single 50 --output /tmp/analysis
 ```
 
 ## 🔧 技术栈

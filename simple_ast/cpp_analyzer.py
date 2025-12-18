@@ -462,6 +462,269 @@ class AnalysisResult:
 
         return "\n".join(lines)
 
+    def generate_simple_summary_report(self) -> str:
+        """生成简化版摘要报告（无分类信息）"""
+        lines = []
+        lines.append("=" * 80)
+        lines.append("📊 分析摘要报告")
+        lines.append("=" * 80)
+        lines.append(f"目标文件: {self.target_file}")
+        lines.append(f"分析模式: {self.mode}")
+        lines.append("")
+
+        # 边界统计
+        if self.file_boundary:
+            lines.append("=" * 80)
+            lines.append("文件边界统计")
+            lines.append("=" * 80)
+            lines.append(f"内部函数: {len(self.file_boundary.internal_functions)} 个")
+            lines.append(f"外部函数调用: {len(self.file_boundary.external_functions)} 个")
+            lines.append(f"内部数据结构: {len(self.file_boundary.internal_data_structures)} 个")
+            lines.append(f"外部数据结构: {len(self.file_boundary.external_data_structures)} 个")
+            lines.append("")
+
+        # 调用链复杂度分析
+        if self.call_chains:
+            lines.append("=" * 80)
+            lines.append("复杂度分析")
+            lines.append("=" * 80)
+
+            depths = []
+            for func_name, call_tree in self.call_chains.items():
+                depth = self._get_call_depth(call_tree)
+                depths.append((func_name, depth))
+
+            if depths:
+                depths.sort(key=lambda x: x[1], reverse=True)
+                avg_depth = sum(d for _, d in depths) / len(depths)
+                max_func, max_depth = depths[0]
+
+                lines.append(f"平均调用深度: {avg_depth:.1f} 层")
+                lines.append(f"最深调用链: {max_func} ({max_depth} 层)")
+                lines.append("")
+                lines.append("调用深度 Top 5:")
+                for func, depth in depths[:5]:
+                    lines.append(f"  • {func}: {depth} 层")
+
+        # 外部依赖摘要
+        if self.file_boundary and self.file_boundary.external_functions:
+            lines.append("\n" + "=" * 80)
+            lines.append("外部依赖摘要 (Top 10)")
+            lines.append("=" * 80)
+            ext_funcs = sorted(self.file_boundary.external_functions)[:10]
+            for func in ext_funcs:
+                lines.append(f"  • {func}")
+            if len(self.file_boundary.external_functions) > 10:
+                lines.append(f"  ... 还有 {len(self.file_boundary.external_functions) - 10} 个外部函数")
+            lines.append("\n  → 完整列表见: boundary.txt")
+
+        lines.append("\n" + "=" * 80)
+        lines.append("详细信息")
+        lines.append("=" * 80)
+        lines.append("  📋 boundary.txt          - 完整的文件边界分析")
+        lines.append("  📁 functions/            - 每个函数的独立详情文件")
+        lines.append("  🔗 call_chains.txt       - 所有函数的调用链")
+        lines.append("  📦 data_structures.txt   - 数据结构详情")
+        lines.append("=" * 80)
+
+        return "\n".join(lines)
+
+    def generate_all_functions_report(self) -> str:
+        """生成所有函数的详情报告（单文件，无分类）"""
+        lines = []
+        lines.append("=" * 80)
+        lines.append("所有函数详情")
+        lines.append("=" * 80)
+        lines.append(f"文件: {self.target_file}")
+
+        all_functions = sorted(self.file_boundary.internal_functions) if self.file_boundary else sorted(self.function_signatures.keys())
+        lines.append(f"共 {len(all_functions)} 个函数")
+        lines.append("")
+
+        for func_name in all_functions:
+            lines.append("=" * 80)
+            lines.append(f"函数: {func_name}")
+            lines.append("=" * 80)
+
+            # 函数签名
+            if func_name in self.function_signatures:
+                lines.append(f"签名: {self.function_signatures[func_name]}")
+
+            # 调用链（简化版）
+            if func_name in self.call_chains:
+                call_tree = self.call_chains[func_name]
+                depth = self._get_call_depth(call_tree)
+                lines.append(f"调用深度: {depth} 层")
+
+                # 列出直接调用的函数
+                if call_tree and call_tree.children:
+                    lines.append(f"直接调用 ({len(call_tree.children)} 个):")
+                    for child in call_tree.children[:20]:  # 显示前 20 个
+                        status = "[EXTERNAL]" if child.is_external else "[内部]"
+                        lines.append(f"  • {child.function_name} {status}")
+                    if len(call_tree.children) > 20:
+                        lines.append(f"  ... 还有 {len(call_tree.children) - 20} 个调用")
+
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def generate_single_function_report(self, func_name: str) -> str:
+        """生成单个函数的完整测试上下文报告（递归展开所有内部依赖）"""
+        lines = []
+
+        # === 1. 主函数信息 ===
+        lines.append(f"[主函数] {func_name}")
+        lines.append("")
+
+        if func_name in self.function_signatures:
+            sig = self.function_signatures[func_name]
+            lines.append(sig.split('//')[0].strip())
+            if '//' in sig:
+                location = sig.split('//')[-1].strip()
+                lines.append(f"位置: {location}")
+            lines.append("")
+
+        # === 2. 收集所有依赖（递归） ===
+        all_internal_deps = set()
+        all_external_deps = set()
+
+        if func_name in self.call_chains:
+            self._collect_all_dependencies(
+                self.call_chains[func_name],
+                all_internal_deps,
+                all_external_deps,
+                func_name
+            )
+
+        # === 3. 统计概览 ===
+        lines.append("[统计]")
+        lines.append(f"依赖内部函数: {len(all_internal_deps)} 个")
+        lines.append(f"需要Mock外部函数: {len(all_external_deps)} 个")
+        lines.append("")
+
+        # === 4. Mock 清单 ===
+        if all_external_deps:
+            lines.append("[Mock清单]")
+            for ext_func in sorted(all_external_deps):
+                lines.append(f"- {ext_func}")
+            lines.append("")
+
+        # === 5. 内部依赖详情 ===
+        if all_internal_deps:
+            lines.append("[内部依赖详情]")
+            lines.append("")
+
+            for dep_func in sorted(all_internal_deps):
+                lines.append(f">> {dep_func}")
+
+                if dep_func in self.function_signatures:
+                    sig = self.function_signatures[dep_func]
+                    lines.append(sig.split('//')[0].strip())
+                    if '//' in sig:
+                        location = sig.split('//')[-1].strip()
+                        lines.append(location)
+
+                # 直接调用
+                if dep_func in self.call_chains:
+                    dep_tree = self.call_chains[dep_func]
+                    if dep_tree and dep_tree.children:
+                        internal = [c.function_name for c in dep_tree.children if not c.is_external]
+                        external = [c.function_name for c in dep_tree.children if c.is_external]
+
+                        if internal:
+                            lines.append(f"  调用内部: {', '.join(internal)}")
+                        if external:
+                            lines.append(f"  调用外部: {', '.join(external)}")
+
+                lines.append("")
+
+        # === 6. 数据结构 ===
+        used_data_structures = self._extract_data_structures_from_function(func_name, all_internal_deps)
+
+        if used_data_structures:
+            internal_ds = [ds for ds in used_data_structures.keys() if ds in self.data_structures]
+            external_ds = [ds for ds in used_data_structures.keys() if ds not in self.data_structures]
+
+            if internal_ds or external_ds:
+                lines.append("[数据结构]")
+
+                if internal_ds:
+                    lines.append(f"内部: {', '.join(sorted(internal_ds))}")
+
+                if external_ds:
+                    lines.append(f"外部: {', '.join(sorted(external_ds))}")
+
+                lines.append("")
+
+        return "\n".join(lines)
+
+    def _collect_all_dependencies(self, node, internal_set, external_set, exclude_func=None, visited=None):
+        """递归收集所有依赖函数（防止循环依赖）"""
+        if visited is None:
+            visited = set()
+
+        if not node or not node.children:
+            return
+
+        for child in node.children:
+            # 跳过主函数自己（避免递归引用）
+            if child.function_name == exclude_func:
+                continue
+
+            # 防止循环依赖：已经访问过的函数不再递归
+            if child.function_name in visited:
+                continue
+
+            if child.is_external:
+                external_set.add(child.function_name)
+            else:
+                internal_set.add(child.function_name)
+                visited.add(child.function_name)  # 标记为已访问
+
+                # 递归收集内部函数的依赖
+                if child.function_name in self.call_chains:
+                    self._collect_all_dependencies(
+                        self.call_chains[child.function_name],
+                        internal_set,
+                        external_set,
+                        exclude_func,
+                        visited
+                    )
+
+    def _extract_data_structures_from_function(self, func_name, internal_deps):
+        """从函数签名中提取使用的数据结构"""
+        used_ds = {}
+
+        # 检查主函数
+        if func_name in self.function_signatures:
+            sig = self.function_signatures[func_name]
+            for ds_name in self.data_structures.keys():
+                if ds_name in sig:
+                    used_ds[ds_name] = self.data_structures[ds_name]
+
+        # 检查依赖的内部函数
+        for dep_func in internal_deps:
+            if dep_func in self.function_signatures:
+                sig = self.function_signatures[dep_func]
+                for ds_name in self.data_structures.keys():
+                    if ds_name in sig:
+                        used_ds[ds_name] = self.data_structures[ds_name]
+
+        # 简单提取常见类型（ImVec2, ImU32等）
+        all_sigs = [self.function_signatures.get(func_name, "")]
+        all_sigs.extend([self.function_signatures.get(f, "") for f in internal_deps if f in self.function_signatures])
+
+        combined_sig = " ".join(all_sigs)
+        common_types = ['ImVec2', 'ImVec4', 'ImU32', 'ImU8', 'ImWchar', 'ImDrawIdx',
+                       'ImDrawCmd', 'ImDrawVert', 'ImDrawList', 'ImFont', 'ImFontAtlas']
+
+        for type_name in common_types:
+            if type_name in combined_sig and type_name not in used_ds:
+                used_ds[type_name] = None  # 外部类型
+
+        return used_ds
+
 
 class CppProjectAnalyzer:
     """Main analyzer class that orchestrates all analysis components."""

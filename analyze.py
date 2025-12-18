@@ -31,7 +31,7 @@ def main():
     global log_file
 
     if len(sys.argv) < 3:
-        print("用法: python analyze.py <项目根目录> <目标CPP文件> [模式] [追踪深度] [函数名]")
+        print("用法: python analyze.py <项目根目录> <目标CPP文件> [模式] [追踪深度] [函数名] [--output <输出目录>]")
         print()
         print("参数说明:")
         print("  项目根目录  - C++项目的根目录")
@@ -39,6 +39,7 @@ def main():
         print("  模式        - 可选，分析模式（默认: single）")
         print("  追踪深度    - 可选，函数调用链追踪深度（默认: 根据模式）")
         print("  函数名      - 可选，只分析指定的函数（默认分析文件中所有函数）")
+        print("  --output    - 可选，输出目录（默认: ./output）")
         print()
         print("可用模式:")
         print("  single / boundary  - 单文件边界模式：快速分析单个文件，外部调用标记但不深入")
@@ -48,6 +49,10 @@ def main():
         print("  # 单文件边界分析（推荐，快速）")
         print("  python analyze.py . main.cpp")
         print("  python analyze.py . main.cpp single")
+        print()
+        print("  # 指定输出目录")
+        print("  python analyze.py . main.cpp --output /path/to/output")
+        print("  python analyze.py . main.cpp single 50 --output ./results")
         print()
         print("  # 单文件分析，指定追踪深度和函数")
         print("  python analyze.py . main.cpp single 50 MyFunction")
@@ -59,36 +64,45 @@ def main():
     project_root = sys.argv[1]
     target_file = sys.argv[2]
 
-    # 解析参数：模式、追踪深度、函数名
-    # 需要智能判断第3个参数是模式还是数字
+    # 解析参数：模式、追踪深度、函数名、输出目录
     mode_str = "single"  # 默认单文件模式
     trace_depth = None
     target_function = None
+    output_dir_str = "output"  # 默认输出目录
 
-    if len(sys.argv) > 3:
-        # 第3个参数：可能是模式或追踪深度
+    # 处理 --output 参数
+    args = sys.argv[3:]
+    if "--output" in args:
+        output_idx = args.index("--output")
+        if output_idx + 1 < len(args):
+            output_dir_str = args[output_idx + 1]
+            # 移除 --output 及其值
+            args = args[:output_idx] + args[output_idx + 2:]
+        else:
+            print("错误：--output 需要指定目录路径")
+            sys.exit(1)
+
+    # 处理其他参数
+    if len(args) > 0:
+        # 第1个参数：可能是模式或追踪深度
         try:
-            trace_depth = int(sys.argv[3])
-            # 如果成功转换为数字，说明是追踪深度，使用默认模式
+            trace_depth = int(args[0])
         except ValueError:
-            # 不是数字，当作模式处理
-            mode_str = sys.argv[3]
+            mode_str = args[0]
 
-    if len(sys.argv) > 4:
-        # 第4个参数：可能是追踪深度或函数名
+    if len(args) > 1:
+        # 第2个参数：可能是追踪深度或函数名
         try:
             if trace_depth is None:
-                trace_depth = int(sys.argv[4])
+                trace_depth = int(args[1])
             else:
-                # 已经有trace_depth了，这是函数名
-                target_function = sys.argv[4]
+                target_function = args[1]
         except ValueError:
-            # 不是数字，当作函数名
-            target_function = sys.argv[4]
+            target_function = args[1]
 
-    if len(sys.argv) > 5:
-        # 第5个参数：函数名
-        target_function = sys.argv[5]
+    if len(args) > 2:
+        # 第3个参数：函数名
+        target_function = args[2]
 
     # 解析模式
     try:
@@ -152,10 +166,11 @@ def main():
         log("✓ 文件分析完成")
         log("")
 
-        # 创建 output 目录
+        # 创建输出目录
         log("步骤 3/4: 生成输出文件...")
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path(output_dir_str)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        log(f"  输出目录: {output_dir.resolve()}")
 
         # 生成文件名
         project_name = Path(project_root).name
@@ -171,16 +186,16 @@ def main():
                 log(f"  检测到大型文件（{func_count} 个函数），使用分层输出模式")
 
         if use_structured_output:
-            # 分层输出模式
+            # 分层输出模式（简化版：无分类）
             base_name = f"{project_name}_{file_name}_{timestamp}"
             structured_dir = output_dir / base_name
             structured_dir.mkdir(exist_ok=True)
 
-            # 1. 生成摘要报告
+            # 1. 生成摘要报告（无分类信息）
             summary_file = structured_dir / "summary.txt"
             log(f"  - 写入摘要报告: {summary_file}")
             with open(summary_file, 'w', encoding='utf-8') as f:
-                f.write(result.generate_summary_report())
+                f.write(result.generate_simple_summary_report())
 
             # 2. 生成边界分析
             boundary_file = structured_dir / "boundary.txt"
@@ -188,16 +203,17 @@ def main():
             with open(boundary_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_boundary_report())
 
-            # 3. 生成按模块分类的函数报告
+            # 3. 生成每个函数的独立文件
             functions_dir = structured_dir / "functions"
             functions_dir.mkdir(exist_ok=True)
 
-            modules = result.classify_functions_by_module()
-            for module, functions in modules.items():
-                module_file = functions_dir / f"{module}.txt"
-                log(f"  - 写入模块函数: {module_file}")
-                with open(module_file, 'w', encoding='utf-8') as f:
-                    f.write(result.generate_functions_by_module_report(module, functions))
+            all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
+            log(f"  - 生成 {len(all_functions)} 个函数文件到: {functions_dir}/")
+
+            for func_name in all_functions:
+                func_file = functions_dir / f"{func_name}.txt"
+                with open(func_file, 'w', encoding='utf-8') as f:
+                    f.write(result.generate_single_function_report(func_name))
 
             # 4. 生成调用链报告
             call_chains_file = structured_dir / "call_chains.txt"
@@ -224,7 +240,7 @@ def main():
             log(f"📁 输出目录: {structured_dir}")
             log(f"📊 摘要报告: {summary_file}")
             log(f"📋 边界分析: {boundary_file}")
-            log(f"📁 函数详情: {functions_dir}/")
+            log(f"📁 函数文件: {functions_dir}/ ({len(all_functions)} 个)")
             log(f"📝 执行日志: {log_filename}")
             log("=" * 80)
 

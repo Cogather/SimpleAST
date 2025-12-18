@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
-from cpp_parser import CppParser
+from .cpp_parser import CppParser
 
 
 @dataclass

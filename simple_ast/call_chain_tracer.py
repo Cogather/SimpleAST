@@ -4,8 +4,8 @@ Call chain tracer - traces function call chains from entry points.
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass, field
 from pathlib import Path
-from cpp_parser import CppParser
-from project_indexer import ProjectIndexer, SymbolInfo
+from .cpp_parser import CppParser
+from .project_indexer import ProjectIndexer, SymbolInfo
 
 
 @dataclass

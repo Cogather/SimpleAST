@@ -3,9 +3,9 @@ Data structure analyzer - analyzes data structures and their usage.
 """
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass, field
-from cpp_parser import CppParser
-from project_indexer import ProjectIndexer, SymbolInfo
-from call_chain_tracer import CallNode
+from .cpp_parser import CppParser
+from .project_indexer import ProjectIndexer, SymbolInfo
+from .call_chain_tracer import CallNode
 
 
 @dataclass

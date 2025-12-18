@@ -3,8 +3,8 @@ Entry point classifier - distinguishes API functions from internal functions.
 """
 from typing import List, Set
 from dataclasses import dataclass
-from cpp_parser import CppParser
-from project_indexer import ProjectIndexer, SymbolInfo
+from .cpp_parser import CppParser
+from .project_indexer import ProjectIndexer, SymbolInfo
 
 
 @dataclass

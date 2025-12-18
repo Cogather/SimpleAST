@@ -75,9 +75,31 @@ python analyze.py . main.cpp full
 - ✅ 文件边界分析（内部/外部区分）
 - ✅ 递归依赖展开（完整测试上下文生成）
 - ✅ **分支复杂度分析**（圈复杂度+关键分支条件，覆盖率指导）
+- ✅ **外部函数分类**（业务依赖/标准库/日志工具，智能Mock清单）
 - ✅ 智能分层输出（大型文件自动拆分为独立函数文件）
 - ✅ 可配置输出目录（支持自定义输出路径）
 - ✅ 支持中文注释和多种编码（UTF-8/GBK/GB2312）
+
+## 🔧 配置
+
+### 外部函数分类配置
+
+创建 `.simple_ast_config.json` 文件自定义Mock清单分类：
+
+```json
+{
+  "external_function_classification": {
+    "custom_exclusions": {
+      "patterns": [
+        "FE_LOG",        // 项目日志函数
+        "MY_PROJECT_*"   // 项目特定工具
+      ]
+    }
+  }
+}
+```
+
+详细配置说明：[doc/EXTERNAL_CLASSIFICATION.md](doc/EXTERNAL_CLASSIFICATION.md)
 
 
 ## 🎯 使用场景

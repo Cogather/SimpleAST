@@ -13,6 +13,7 @@ from .data_structure_analyzer import DataStructureAnalyzer, DataStructureInfo
 from .analysis_modes import AnalysisMode, get_mode_config, AnalysisModeConfig
 from .single_file_analyzer import SingleFileAnalyzer, FileBoundary
 from .branch_analyzer import BranchAnalyzer, format_branch_analysis
+from .external_classifier import ExternalFunctionClassifier, format_classified_externals
 
 
 @dataclass
@@ -26,6 +27,7 @@ class AnalysisResult:
     mode: str = "full_project"  # 分析模式
     file_boundary: Optional[FileBoundary] = None  # 单文件边界信息（仅在 single_file_boundary 模式）
     branch_analyses: Dict[str, 'BranchAnalysis'] = None  # 函数分支分析结果（func_name -> BranchAnalysis）
+    external_classifier: Optional['ExternalFunctionClassifier'] = None  # 外部函数分类器
 
     def format_report(self) -> str:
         """Format the complete analysis as a readable report."""
@@ -611,11 +613,34 @@ class AnalysisResult:
             if branch_analysis.cyclomatic_complexity > 5:
                 lines.append(format_branch_analysis(branch_analysis))
 
-        # === 4. Mock 清单 ===
+        # === 4. Mock 清单（分类显示） ===
         if all_external_deps:
             lines.append("[Mock清单]")
-            for ext_func in sorted(all_external_deps):
-                lines.append(f"- {ext_func}")
+
+            # 使用分类器分类外部函数
+            classified = self.external_classifier.classify(all_external_deps)
+
+            # 业务外部依赖（最重要）
+            if classified['business']:
+                lines.append(f"业务外部依赖（需要Mock）: {len(classified['business'])} 个")
+                for func in sorted(classified['business']):
+                    lines.append(f"- {func}")
+                lines.append("")
+
+            # 日志/工具函数
+            if classified['logging_utility']:
+                lines.append(f"日志/工具函数（可选Mock）: {len(classified['logging_utility'])} 个")
+                for func in sorted(classified['logging_utility']):
+                    lines.append(f"- {func}")
+                lines.append("")
+
+            # 标准库函数
+            if classified['standard_library']:
+                lines.append(f"标准库函数（通常不需要Mock）: {len(classified['standard_library'])} 个")
+                for func in sorted(classified['standard_library']):
+                    lines.append(f"- {func}")
+                lines.append("")
+        else:
             lines.append("")
 
         # === 5. 内部依赖详情 ===
@@ -798,6 +823,9 @@ class CppProjectAnalyzer:
         # 分支分析器（所有模式都可用）
         self.branch_analyzer = BranchAnalyzer()
 
+        # 外部函数分类器（所有模式都可用）
+        self.external_classifier = ExternalFunctionClassifier()
+
     def analyze_file(self, target_file: str, trace_depth: int = 10, target_function: Optional[str] = None) -> AnalysisResult:
         """
         Analyze a specific C++ file.
@@ -904,7 +932,8 @@ class CppProjectAnalyzer:
             data_structures=data_structures,
             mode=self.mode.value,
             file_boundary=boundary,
-            branch_analyses=branch_analyses
+            branch_analyses=branch_analyses,
+            external_classifier=self.external_classifier
         )
 
         print("\nBoundary analysis complete!")
@@ -991,7 +1020,8 @@ class CppProjectAnalyzer:
             call_chains=call_chains,
             function_signatures=function_signatures,
             data_structures=data_structures,
-            mode=self.mode.value
+            mode=self.mode.value,
+            external_classifier=self.external_classifier
         )
 
         print("\nAnalysis complete!")

@@ -1,0 +1,83 @@
+{
+  "external_function_classification": {
+    "description": "外部函数分类配置 - 用于Mock清单生成",
+    "standard_library": {
+      "description": "标准库函数（通常不需要Mock）",
+      "patterns": [
+        "std::*",
+        "memset*",
+        "memcpy*",
+        "memmove*",
+        "memcmp*",
+        "strcpy*",
+        "strncpy*",
+        "strcat*",
+        "strcmp*",
+        "strncmp*",
+        "strlen*",
+        "strstr*",
+        "strchr*",
+        "sprintf*",
+        "snprintf*",
+        "printf*",
+        "fprintf*",
+        "sscanf*",
+        "malloc*",
+        "calloc*",
+        "realloc*",
+        "free*",
+        "new",
+        "delete",
+        "pthread_*",
+        "socket*",
+        "bind*",
+        "connect*",
+        "listen*",
+        "accept*",
+        "send*",
+        "recv*",
+        "close*",
+        "fopen*",
+        "fclose*",
+        "fread*",
+        "fwrite*",
+        "fseek*",
+        "ftell*"
+      ]
+    },
+    "logging_utility": {
+      "description": "日志/工具函数（可选Mock，根据测试需要）",
+      "patterns": [
+        "*LOG*",
+        "*log*",
+        "*Log*",
+        "*PRINT*",
+        "*Print*",
+        "*print*",
+        "*DEBUG*",
+        "*Debug*",
+        "*debug*",
+        "*TRACE*",
+        "*Trace*",
+        "*trace*",
+        "*ASSERT*",
+        "*Assert*",
+        "*assert*",
+        "*CHECK*",
+        "*Check*",
+        "*VERIFY*",
+        "*Verify*"
+      ]
+    },
+    "custom_exclusions": {
+      "description": "用户自定义排除的函数（项目特定）",
+      "patterns": [
+        "FE_LOG",
+        "USE",
+        "IM_ASSERT*",
+        "IM_FIXNORMAL2F",
+        "IM_NORMALIZE2F_OVER_ZERO"
+      ]
+    }
+  }
+}

@@ -212,10 +212,13 @@ def main():
             all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
             log(f"  - 生成 {len(all_functions)} 个函数文件到: {functions_dir}/")
 
-            for func_name in all_functions:
+            for idx, func_name in enumerate(all_functions, 1):
                 func_file = functions_dir / f"{func_name}.txt"
+                print(f"\n[文件输出] 生成函数报告 ({idx}/{len(all_functions)}): {func_name}", file=sys.stderr)
+                report = result.generate_single_function_report(func_name)
                 with open(func_file, 'w', encoding='utf-8') as f:
-                    f.write(result.generate_single_function_report(func_name))
+                    f.write(report)
+                print(f"[文件输出] ✓ 写入文件: {func_file.name} ({len(report)} 字符)", file=sys.stderr)
 
             # 4. 生成调用链报告
             call_chains_file = result_dir / "call_chains.txt"

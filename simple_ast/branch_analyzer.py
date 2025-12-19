@@ -45,9 +45,25 @@ class BranchAnalyzer:
         Returns:
             BranchAnalysis: 分支分析结果
         """
+        import sys
+
+        # 获取函数名用于日志
+        func_name = "unknown"
+        declarator = func_node.child_by_field_name('declarator')
+        if declarator:
+            if declarator.type == 'function_declarator':
+                name_node = declarator.child_by_field_name('declarator')
+                if name_node:
+                    func_name = CppParser.get_node_text(name_node, source_code)
+            else:
+                func_name = CppParser.get_node_text(declarator, source_code)
+
+        print(f"\n[分支分析] 开始分析函数: {func_name}", file=sys.stderr)
+
         # 获取函数体
         body_node = self._get_function_body(func_node)
         if not body_node:
+            print(f"[分支分析] 未找到函数体", file=sys.stderr)
             return BranchAnalysis(1, 0, 0, 0, 0, 0, [])
 
         # 统计各类分支
@@ -57,16 +73,21 @@ class BranchAnalyzer:
         loop_count = self._count_nodes(body_node, ['for_statement', 'while_statement', 'do_statement'])
         early_return_count = self._count_early_returns(body_node)
 
+        print(f"[分支分析] 统计: if={if_count}, switch={switch_count}, case={switch_cases}, loop={loop_count}, early_return={early_return_count}", file=sys.stderr)
+
         # 计算圈复杂度：1 + 决策点数量
         # 决策点包括：if, while, for, case, &&, ||, ?:
         decision_points = if_count + loop_count + switch_cases
-        decision_points += self._count_logical_operators(body_node, source_code)
-        decision_points += self._count_ternary_operators(body_node)
+        logical_ops = self._count_logical_operators(body_node, source_code)
+        ternary_ops = self._count_ternary_operators(body_node)
+        decision_points += logical_ops + ternary_ops
 
         cyclomatic = 1 + decision_points
+        print(f"[分支分析] 圈复杂度: {cyclomatic} (基础1 + 决策点{decision_points}, 逻辑运算符{logical_ops}, 三元运算{ternary_ops})", file=sys.stderr)
 
         # 提取关键分支条件
         conditions = self._extract_key_conditions(body_node, source_code)
+        print(f"[分支分析] 提取了 {len(conditions)} 个关键条件", file=sys.stderr)
 
         return BranchAnalysis(
             cyclomatic_complexity=cyclomatic,
@@ -204,6 +225,8 @@ class BranchAnalyzer:
 
     def _analyze_switch_condition(self, switch_node, source_code: bytes) -> Optional[BranchCondition]:
         """分析switch语句的条件"""
+        import sys
+
         # 找到switch的条件和所有case
         condition_node = None
         for child in switch_node.children:
@@ -217,19 +240,29 @@ class BranchAnalyzer:
         condition_text = CppParser.get_node_text(condition_node, source_code)
         line = switch_node.start_point[0] + 1
 
+        print(f"[分支分析]   分析switch: 行{line}, 条件={condition_text}", file=sys.stderr)
+
         # 提取所有case标签值
         case_nodes = self._find_all_nodes(switch_node, 'case_statement')
         case_values = []
-        for case_node in case_nodes:  # 显示所有case值
+        print(f"[分支分析]     找到 {len(case_nodes)} 个case节点", file=sys.stderr)
+
+        for idx, case_node in enumerate(case_nodes):  # 显示所有case值
             # case语句的第一个子节点通常是值表达式
             for child in case_node.children:
                 if child.type not in ['case', ':']:
                     case_value = CppParser.get_node_text(child, source_code).strip()
                     if case_value:
                         case_values.append(case_value)
+                        if idx < 5:  # 只打印前5个，避免日志过长
+                            print(f"[分支分析]       case {idx+1}: {case_value}", file=sys.stderr)
                     break
 
+        if len(case_values) > 5:
+            print(f"[分支分析]       ... 还有 {len(case_values)-5} 个case", file=sys.stderr)
+
         has_default = self._count_nodes(switch_node, ['default_statement']) > 0
+        print(f"[分支分析]     有default分支: {has_default}", file=sys.stderr)
 
         suggestions = []
         if case_values:
@@ -240,6 +273,7 @@ class BranchAnalyzer:
 
             case_display = ', '.join(display_values)
             suggestions.append(f"case值: {case_display}")
+            print(f"[分支分析]     生成建议: {len(display_values)} 个case值", file=sys.stderr)
         else:
             suggestions.append(f"测试 {len(case_nodes)} 个case分支")
             if has_default:

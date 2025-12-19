@@ -138,6 +138,26 @@ python analyze.py . main.cpp --output ./my_results
 python analyze.py . main.cpp single 50 --output /tmp/analysis
 ```
 
+### 查看详细分析日志
+
+如果分析结果不符合预期（缺少常量、数据结构等），可以查看详细日志定位问题：
+
+```bash
+# Windows
+python analyze.py . test.cpp single 15 MyFunc 2>&1 | more
+
+# Linux/Mac
+python analyze.py . test.cpp single 15 MyFunc 2>&1 | less
+
+# 保存日志到文件
+python analyze.py . test.cpp single 15 MyFunc 2>debug.log
+```
+
+日志会显示：
+- 常量提取过程（从哪里提取、找到哪些、哪些未找到）
+- 数据结构过滤过程（保留了哪些、过滤了哪些、原因）
+- 文件搜索路径
+
 ## 🔧 技术栈
 
 - **Python 3.8+**

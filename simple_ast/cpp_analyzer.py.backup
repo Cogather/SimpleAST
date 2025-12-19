@@ -574,30 +574,14 @@ class AnalysisResult:
         return "\n".join(lines)
 
     def generate_single_function_report(self, func_name: str) -> str:
-        """
-        生成单个函数的完整测试上下文报告
+        """生成单个函数的完整测试上下文报告（递归展开所有内部依赖）"""
+        lines = []
+        visited = set()
+        all_data_structures = set()  # 收集所有使用的数据结构
+        all_external_funcs = set()   # 收集所有外部函数（用于常量提取）
 
-        重构说明：委托给 FunctionReporter 实现，降低复杂度
-        """
-        from .reporters import FunctionReporter
-        reporter = FunctionReporter(self)
-        return reporter.generate(func_name)
-
-    # ==================== 以下方法已废弃，由 FunctionReporter 使用 ====================
-    # 保留是为了向后兼容，如果直接调用这些内部方法
-
-    def _generate_recursive_function_info_DEPRECATED(self, func_name: str, lines: List[str], number_prefix: str, visited: Set[str], all_data_structures: Set[str], all_external_funcs: Set[str]):
-        """已废弃：请使用 FunctionReporter"""
-        pass  # 保留空壳，避免报错
-
-    def _generate_recursive_function_info(self, func_name: str, lines: List[str], number_prefix: str, visited: Set[str], all_data_structures: Set[str], all_external_funcs: Set[str]):
-        """递归生成函数信息（带序号层级） - 内部使用"""
-        # 注意：这个方法现在只是为了避免破坏性变更而保留
-        # 实际逻辑已移到 FunctionReporter
-        pass  # 让调用者使用新的 FunctionReporter
-
-    def _OLD_generate_recursive_function_info(self, func_name: str, lines: List[str], number_prefix: str, visited: Set[str], all_data_structures: Set[str], all_external_funcs: Set[str]):
-        """原始实现（已废弃，保留作为参考）"""
+        # 递归生成主函数及其所有内部依赖
+        self._generate_recursive_function_info(func_name, lines, "", visited, all_data_structures, all_external_funcs)
 
         # 提取并展示常量/宏定义
         constants = self._extract_constants_from_function(func_name)

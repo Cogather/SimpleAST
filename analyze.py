@@ -183,13 +183,12 @@ def main():
         result_dir.mkdir(exist_ok=True)
         log(f"  输出目录: {result_dir.resolve()}")
 
-        # 检查是否需要分层输出（单文件边界模式且函数数量 > 50）
+        # 统一使用分层输出（无论函数数量多少）
         use_structured_output = False
         if mode.value == "single_file_boundary" and result.file_boundary:
             func_count = len(result.file_boundary.internal_functions)
-            if func_count > 50:
-                use_structured_output = True
-                log(f"  检测到大型文件（{func_count} 个函数），使用分层输出模式")
+            use_structured_output = True
+            log(f"  使用分层输出模式（共 {func_count} 个函数）")
 
         if use_structured_output:
             # 分层输出模式
@@ -237,17 +236,18 @@ def main():
                     f.write(report)
                 print(f"[文件输出] ✓ 写入文件: {func_file.name} ({len(report)} 字符)", file=sys.stderr)
 
-            # 4. 生成调用链报告
-            call_chains_file = result_dir / "call_chains.txt"
-            log(f"  - 写入调用链: {call_chains_file}")
-            with open(call_chains_file, 'w', encoding='utf-8') as f:
-                f.write(result.generate_call_chains_report())
+            # 4. 生成调用链和数据结构报告（仅在多函数时）
+            # 注意：单函数分析时，functions/ 已包含所有信息，无需额外文件
+            if len(all_functions) > 1:
+                call_chains_file = result_dir / "call_chains.txt"
+                log(f"  - 写入调用链: {call_chains_file}")
+                with open(call_chains_file, 'w', encoding='utf-8') as f:
+                    f.write(result.generate_call_chains_report())
 
-            # 5. 生成数据结构报告
-            data_structures_file = result_dir / "data_structures.txt"
-            log(f"  - 写入数据结构: {data_structures_file}")
-            with open(data_structures_file, 'w', encoding='utf-8') as f:
-                f.write(result.generate_data_structures_report())
+                data_structures_file = result_dir / "data_structures.txt"
+                log(f"  - 写入数据结构: {data_structures_file}")
+                with open(data_structures_file, 'w', encoding='utf-8') as f:
+                    f.write(result.generate_data_structures_report())
 
             # 6. JSON 输出
             json_file = result_dir / "analysis.json"

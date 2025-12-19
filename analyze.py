@@ -209,8 +209,25 @@ def main():
             functions_dir = result_dir / "functions"
             functions_dir.mkdir(exist_ok=True)
 
-            all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
-            log(f"  - 生成 {len(all_functions)} 个函数文件到: {functions_dir}/")
+            # 如果指定了目标函数，只生成目标函数及其依赖的文件
+            if target_function:
+                # 从调用链中收集所有相关函数
+                all_functions = set()
+                if target_function in result.call_chains:
+                    all_functions.add(target_function)
+                    # 递归收集内部依赖
+                    def collect_internal_funcs(node):
+                        if node and not node.is_external:
+                            all_functions.add(node.function_name)
+                            for child in node.children:
+                                collect_internal_funcs(child)
+                    collect_internal_funcs(result.call_chains[target_function])
+                all_functions = sorted(all_functions)
+                log(f"  - 生成 {len(all_functions)} 个函数文件（目标函数及依赖）到: {functions_dir}/")
+            else:
+                # 生成所有函数的文件
+                all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
+                log(f"  - 生成 {len(all_functions)} 个函数文件到: {functions_dir}/")
 
             for idx, func_name in enumerate(all_functions, 1):
                 func_file = functions_dir / f"{func_name}.txt"

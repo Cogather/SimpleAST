@@ -3,7 +3,7 @@ Main C++ Project Analyzer - integrates all components.
 """
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 from dataclasses import dataclass, asdict
 
 from .project_indexer import ProjectIndexer
@@ -576,138 +576,390 @@ class AnalysisResult:
     def generate_single_function_report(self, func_name: str) -> str:
         """生成单个函数的完整测试上下文报告（递归展开所有内部依赖）"""
         lines = []
+        visited = set()
+        all_data_structures = set()  # 收集所有使用的数据结构
+        all_external_funcs = set()   # 收集所有外部函数（用于常量提取）
 
-        # === 1. 主函数信息 ===
-        lines.append(f"[主函数] {func_name}")
-        lines.append("")
+        # 递归生成主函数及其所有内部依赖
+        self._generate_recursive_function_info(func_name, lines, "", visited, all_data_structures, all_external_funcs)
+
+        # 提取并展示常量/宏定义
+        constants = self._extract_constants_from_function(func_name)
+        if constants:
+            lines.append("\n[常量定义]")
+            for const_name, const_def in sorted(constants.items()):
+                if const_def:
+                    lines.append(f"{const_name}: {const_def}")
+
+        # 统一展示数据结构定义章节
+        if all_data_structures:
+            lines.append("\n[数据结构]")
+
+            # 分类：内部定义 vs 外部引用
+            internal_ds = [ds for ds in all_data_structures if ds in self.data_structures]
+            external_ds = [ds for ds in all_data_structures if ds not in self.data_structures]
+
+            # 显示内部定义的数据结构（有完整代码）
+            if internal_ds:
+                for ds in sorted(internal_ds):
+                    if self.file_boundary and hasattr(self.file_boundary, 'file_data_structures') and ds in self.file_boundary.file_data_structures:
+                        ds_info = self.file_boundary.file_data_structures[ds]
+                        lines.append(f"\n{ds} ({ds_info['type']}, 内部 {self.target_file}:{ds_info['line']}):")
+                        lines.append(ds_info['definition'])
+                    else:
+                        lines.append(f"\n{ds} (内部)")
+
+            # 尝试从头文件读取外部数据结构
+            if external_ds:
+                for ds in sorted(external_ds):
+                    definition = self._try_read_external_data_structure(ds)
+                    if definition:
+                        lines.append(f"\n{ds} (外部):")
+                        lines.append(definition)
+
+        return "\n".join(lines)
+
+    def _generate_recursive_function_info(self, func_name: str, lines: List[str], number_prefix: str, visited: Set[str], all_data_structures: Set[str], all_external_funcs: Set[str]):
+        """递归生成函数信息（带序号层级）"""
+        # 防止循环依赖
+        if func_name in visited:
+            return
+        visited.add(func_name)
+
+        # === 1. 函数签名 ===
+        if number_prefix:
+            lines.append(f"\n{number_prefix} {func_name}")
+        else:
+            lines.append(f"函数: {func_name}")
 
         if func_name in self.function_signatures:
             sig = self.function_signatures[func_name]
-            lines.append(sig.split('//')[0].strip())
+            sig_part = sig.split('//')[0].strip()
             if '//' in sig:
                 location = sig.split('//')[-1].strip()
-                lines.append(f"位置: {location}")
-            lines.append("")
+                lines.append(f"{sig_part} // {location}")
+            else:
+                lines.append(sig_part)
 
-        # === 2. 收集所有依赖（递归） ===
-        all_internal_deps = set()
-        all_external_deps = set()
-
-        if func_name in self.call_chains:
-            self._collect_all_dependencies(
-                self.call_chains[func_name],
-                all_internal_deps,
-                all_external_deps,
-                func_name
-            )
-
-        # === 3. 统计概览 ===
-        lines.append("[统计]")
-        lines.append(f"依赖内部函数: {len(all_internal_deps)} 个")
-        lines.append(f"需要Mock外部函数: {len(all_external_deps)} 个")
-        lines.append("")
-
-        # === 3.5 分支复杂度分析（仅当圈复杂度>5时） ===
+        # === 2. 分支复杂度分析（仅当圈复杂度>5时） ===
         if hasattr(self, 'branch_analyses') and self.branch_analyses and func_name in self.branch_analyses:
             branch_analysis = self.branch_analyses[func_name]
             if branch_analysis.cyclomatic_complexity > 5:
-                lines.append(format_branch_analysis(branch_analysis))
+                # 简化版分支信息
+                lines.append(f"圈复杂度: {branch_analysis.cyclomatic_complexity}")
+                if branch_analysis.conditions:
+                    lines.append("关键分支:")
+                    for idx, cond in enumerate(branch_analysis.conditions[:5], 1):  # 只显示前5个
+                        lines.append(f"  {idx}. {cond.condition}")
 
-        # === 4. Mock 清单（分类显示） ===
-        if all_external_deps:
-            lines.append("[Mock清单]")
+        # === 3. 收集直接依赖 ===
+        direct_internal_deps = []
+        direct_external_deps = set()
 
+        if func_name in self.call_chains:
+            call_tree = self.call_chains[func_name]
+            if call_tree and call_tree.children:
+                for child in call_tree.children:
+                    if child.is_external:
+                        direct_external_deps.add(child.function_name)
+                        all_external_funcs.add(child.function_name)  # 收集到全局
+                    else:
+                        direct_internal_deps.append(child.function_name)
+
+        # === 4. Mock清单（仅显示业务外部依赖，并搜索签名） ===
+        if direct_external_deps:
             # 使用分类器分类外部函数
-            classified = self.external_classifier.classify(all_external_deps)
+            classified = self.external_classifier.classify(direct_external_deps)
 
-            # 业务外部依赖（最重要）
+            # 仅显示业务外部依赖（隐藏标准库和日志函数）
             if classified['business']:
-                lines.append(f"业务外部依赖（需要Mock）: {len(classified['business'])} 个")
+                lines.append("Mock:")
                 for func in sorted(classified['business']):
-                    lines.append(f"- {func}")
-                lines.append("")
+                    # 尝试搜索函数签名
+                    signature = self._search_function_signature(func)
+                    if signature:
+                        lines.append(f"  {func}: {signature}")
+                    else:
+                        lines.append(f"  {func}")
 
-            # 日志/工具函数
-            if classified['logging_utility']:
-                lines.append(f"日志/工具函数（可选Mock）: {len(classified['logging_utility'])} 个")
-                for func in sorted(classified['logging_utility']):
-                    lines.append(f"- {func}")
-                lines.append("")
-
-            # 标准库函数
-            if classified['standard_library']:
-                lines.append(f"标准库函数（通常不需要Mock）: {len(classified['standard_library'])} 个")
-                for func in sorted(classified['standard_library']):
-                    lines.append(f"- {func}")
-                lines.append("")
-        else:
-            lines.append("")
-
-        # === 5. 内部依赖详情 ===
-        if all_internal_deps:
-            lines.append("[内部依赖详情]")
-            lines.append("")
-
-            for dep_func in sorted(all_internal_deps):
-                lines.append(f">> {dep_func}")
-
-                if dep_func in self.function_signatures:
-                    sig = self.function_signatures[dep_func]
-                    lines.append(sig.split('//')[0].strip())
-                    if '//' in sig:
-                        location = sig.split('//')[-1].strip()
-                        lines.append(location)
-
-                # 直接调用
-                if dep_func in self.call_chains:
-                    dep_tree = self.call_chains[dep_func]
-                    if dep_tree and dep_tree.children:
-                        internal = [c.function_name for c in dep_tree.children if not c.is_external]
-                        external = [c.function_name for c in dep_tree.children if c.is_external]
-
-                        if internal:
-                            lines.append(f"  调用内部: {', '.join(internal)}")
-                        if external:
-                            lines.append(f"  调用外部: {', '.join(external)}")
-
-                lines.append("")
-
-        # === 6. 数据结构 ===
-        used_data_structures = self._extract_data_structures_from_function(func_name, all_internal_deps)
+        # === 5. 数据结构 - 只列出名称，收集到 all_data_structures ===
+        used_data_structures = self._extract_data_structures_from_single_function(func_name)
 
         if used_data_structures:
-            internal_ds = [ds for ds in used_data_structures.keys() if ds in self.data_structures]
-            external_ds = [ds for ds in used_data_structures.keys() if ds not in self.data_structures]
+            # 添加到全局收集set
+            all_data_structures.update(used_data_structures.keys())
 
-            if internal_ds or external_ds:
-                lines.append("[数据结构]")
-                lines.append("")
+            # 只列出名称
+            lines.append(f"数据结构: {', '.join(sorted(used_data_structures.keys()))}")
 
-                # 输出内部数据结构的完整定义
-                if internal_ds:
-                    lines.append("内部定义:")
-                    lines.append("")
+        # === 6. 递归显示内部依赖函数 ===
+        if direct_internal_deps:
+            for idx, dep_func in enumerate(direct_internal_deps, start=1):
+                # 生成序号前缀
+                if number_prefix:
+                    new_prefix = f"{number_prefix}.{idx}"
+                else:
+                    new_prefix = f"{idx}"
 
-                    for ds in sorted(internal_ds):
-                        # 从 file_boundary 获取数据结构定义
-                        if self.file_boundary and hasattr(self.file_boundary, 'file_data_structures') and ds in self.file_boundary.file_data_structures:
-                            ds_info = self.file_boundary.file_data_structures[ds]
-                            lines.append(f">> {ds} ({ds_info['type']})")
-                            lines.append(f"定义: {self.target_file}:{ds_info['line']}")
-                            lines.append(ds_info['definition'])
-                            lines.append("")
-                        else:
-                            # 如果没有定义信息，只显示名称
-                            lines.append(f">> {ds}")
-                            lines.append("")
+                # 递归生成依赖函数的完整信息
+                self._generate_recursive_function_info(dep_func, lines, new_prefix, visited, all_data_structures, all_external_funcs)
 
-                # 输出外部数据结构引用
-                if external_ds:
-                    lines.append("外部引用:")
-                    lines.append(f"{', '.join(sorted(external_ds))}")
-                    lines.append("")
+    def _extract_data_structures_from_single_function(self, func_name: str):
+        """从单个函数签名中提取使用的数据结构"""
+        used_ds = {}
 
-        return "\n".join(lines)
+        if func_name not in self.function_signatures:
+            return used_ds
+
+        sig = self.function_signatures[func_name]
+
+        # 检查已知的数据结构
+        for ds_name in self.data_structures.keys():
+            if ds_name in sig:
+                used_ds[ds_name] = self.data_structures[ds_name]
+
+        # 提取常见类型（ImVec2, ImU32等）
+        common_types = ['ImVec2', 'ImVec4', 'ImU32', 'ImU8', 'ImWchar', 'ImDrawIdx',
+                       'ImDrawCmd', 'ImDrawVert', 'ImDrawList', 'ImFont', 'ImFontAtlas']
+
+        for type_name in common_types:
+            if type_name in sig and type_name not in used_ds:
+                used_ds[type_name] = None  # 外部类型
+
+        return used_ds
+
+    def _try_read_external_data_structure(self, struct_name: str) -> Optional[str]:
+        """尝试从头文件中读取外部数据结构的定义（文本搜索）"""
+        from pathlib import Path
+        import re
+
+        # 常见的头文件位置
+        target_file_path = Path(self.target_file)
+        possible_headers = []
+
+        # 1. 同目录下的同名.h文件
+        header_same_name = target_file_path.with_suffix('.h')
+        if header_same_name.exists():
+            possible_headers.append(header_same_name)
+
+        # 2. 同目录下的其他.h文件（例如 imgui.h）
+        header_dir = target_file_path.parent
+        if header_dir.exists():
+            for h_file in header_dir.glob('*.h'):
+                if h_file not in possible_headers:
+                    possible_headers.append(h_file)
+
+        # 3. 上层include目录
+        include_dirs = [
+            header_dir / 'include',
+            header_dir.parent / 'include',
+        ]
+        for inc_dir in include_dirs:
+            if inc_dir.exists():
+                for h_file in inc_dir.glob('*.h'):
+                    possible_headers.append(h_file)
+
+        # 在头文件中搜索定义（文本搜索）
+        for header_file in possible_headers[:10]:  # 限制搜索范围
+            try:
+                with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                # 搜索结构体定义
+                definition = self._search_struct_by_text(content, struct_name, header_file.name)
+                if definition:
+                    return definition
+
+            except Exception as e:
+                # 读取失败，继续尝试下一个
+                continue
+
+        return None
+
+    def _search_struct_by_text(self, content: str, struct_name: str, filename: str) -> Optional[str]:
+        """用文本搜索查找数据结构定义"""
+        import re
+
+        lines = content.split('\n')
+
+        # 搜索模式（按优先级）
+        patterns = [
+            # 1. struct/class 定义: struct Name { 或 struct Name\n{
+            (rf'^\s*(struct|class)\s+{re.escape(struct_name)}\s*$', 'struct'),
+            (rf'^\s*(struct|class)\s+{re.escape(struct_name)}\s*\{{', 'struct'),
+
+            # 2. typedef: typedef ... Name;
+            (rf'^\s*typedef\s+.*\s+{re.escape(struct_name)}\s*;', 'typedef'),
+
+            # 3. using (C++11): using Name = ...;
+            (rf'^\s*using\s+{re.escape(struct_name)}\s*=', 'using'),
+        ]
+
+        for line_num, line in enumerate(lines):
+            for pattern, def_type in patterns:
+                match = re.search(pattern, line)
+                if match:
+                    # 找到了，提取完整定义
+                    if def_type == 'typedef' or def_type == 'using':
+                        # typedef/using 通常是单行
+                        return f"// 来自: {filename}\n{line.strip()}"
+
+                    elif def_type == 'struct':
+                        # struct/class 需要找到完整的 body
+                        definition_lines = [line]
+                        brace_count = line.count('{') - line.count('}')
+
+                        # 如果第一行没有 {，继续找
+                        if '{' not in line:
+                            for next_line in lines[line_num + 1:line_num + 5]:
+                                definition_lines.append(next_line)
+                                if '{' in next_line:
+                                    brace_count = next_line.count('{') - next_line.count('}')
+                                    break
+
+                        # 继续读取直到找到匹配的 }
+                        start_idx = line_num + len(definition_lines)
+                        for i, next_line in enumerate(lines[start_idx:], start=start_idx):
+                            definition_lines.append(next_line)
+                            brace_count += next_line.count('{') - next_line.count('}')
+
+                            if brace_count == 0 and '}' in next_line:
+                                # 找到结束
+                                break
+
+                            # 限制最大行数
+                            if len(definition_lines) >= 60:
+                                definition_lines.append(f"    // ... (省略剩余部分)")
+                                definition_lines.append("};")
+                                break
+
+                        definition = '\n'.join(definition_lines)
+                        return f"// 来自: {filename}\n{definition}"
+
+        return None
+
+    def _search_function_signature(self, func_name: str) -> Optional[str]:
+        """搜索外部函数的签名（在头文件中）"""
+        from pathlib import Path
+        import re
+
+        # 常见的头文件位置
+        target_file_path = Path(self.target_file)
+        possible_headers = []
+
+        # 1. 同目录下的同名.h文件
+        header_same_name = target_file_path.with_suffix('.h')
+        if header_same_name.exists():
+            possible_headers.append(header_same_name)
+
+        # 2. 同目录下的其他.h文件
+        header_dir = target_file_path.parent
+        if header_dir.exists():
+            for h_file in header_dir.glob('*.h'):
+                if h_file not in possible_headers:
+                    possible_headers.append(h_file)
+
+        # 在头文件中搜索函数声明
+        for header_file in possible_headers[:10]:
+            try:
+                with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                # 搜索函数声明（支持多行）
+                # 模式：返回类型 函数名(参数)
+                lines = content.split('\n')
+                for i, line in enumerate(lines):
+                    # 简单匹配：包含函数名的行
+                    if func_name in line and '(' in line:
+                        # 可能是函数声明
+                        # 提取完整声明（可能跨行）
+                        declaration = line.strip()
+
+                        # 如果没有分号且没有花括号，可能跨行
+                        if ';' not in declaration and '{' not in declaration and i + 1 < len(lines):
+                            for next_line in lines[i+1:i+5]:
+                                declaration += ' ' + next_line.strip()
+                                if ';' in next_line or '{' in next_line:
+                                    break
+
+                        # 清理
+                        declaration = declaration.split(';')[0].strip()
+                        declaration = declaration.split('{')[0].strip()
+
+                        # 验证是否真的是目标函数
+                        if re.search(rf'\b{re.escape(func_name)}\s*\(', declaration):
+                            return declaration
+
+            except Exception:
+                continue
+
+        return None
+
+    def _extract_constants_from_function(self, func_name: str) -> Dict[str, str]:
+        """从函数中提取使用的常量和宏定义"""
+        from pathlib import Path
+        import re
+
+        if func_name not in self.function_signatures:
+            return {}
+
+        # 从函数签名和分支条件中提取标识符
+        identifiers = set()
+
+        # 1. 从函数签名提取
+        sig = self.function_signatures[func_name]
+        # 提取大写标识符（通常是常量/宏）
+        upper_identifiers = re.findall(r'\b[A-Z][A-Z0-9_]+\b', sig)
+        identifiers.update(upper_identifiers)
+
+        # 2. 从分支条件提取
+        if hasattr(self, 'branch_analyses') and self.branch_analyses and func_name in self.branch_analyses:
+            branch_analysis = self.branch_analyses[func_name]
+            for condition in branch_analysis.conditions:
+                upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', condition.condition)
+                identifiers.update(upper_ids)
+
+        if not identifiers:
+            return {}
+
+        # 在头文件中搜索这些标识符的定义
+        constants = {}
+        target_file_path = Path(self.target_file)
+        possible_headers = []
+
+        # 收集头文件
+        header_same_name = target_file_path.with_suffix('.h')
+        if header_same_name.exists():
+            possible_headers.append(header_same_name)
+
+        header_dir = target_file_path.parent
+        if header_dir.exists():
+            for h_file in header_dir.glob('*.h'):
+                if h_file not in possible_headers:
+                    possible_headers.append(h_file)
+
+        # 搜索定义
+        for identifier in identifiers:
+            for header_file in possible_headers[:10]:
+                try:
+                    with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        for line in f:
+                            # 搜索 #define 或 enum
+                            if re.search(rf'^\s*#define\s+{re.escape(identifier)}\b', line):
+                                constants[identifier] = line.strip()
+                                break
+                            elif re.search(rf'^\s*{re.escape(identifier)}\s*=', line):
+                                # enum 成员
+                                constants[identifier] = line.strip()
+                                break
+
+                    if identifier in constants:
+                        break
+
+                except Exception:
+                    continue
+
+        return constants
 
     def _collect_all_dependencies(self, node, internal_set, external_set, exclude_func=None, visited=None):
         """递归收集所有依赖函数（防止循环依赖）"""

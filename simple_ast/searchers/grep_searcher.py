@@ -132,10 +132,14 @@ class GrepSearcher:
             匹配结果列表
         """
         try:
+            # 根据操作系统选择脚本类型
+            is_windows = sys.platform == 'win32'
+            suffix = '.bat' if is_windows else '.sh'
+
             # 创建临时脚本文件
             with tempfile.NamedTemporaryFile(
                 mode='w',
-                suffix='.sh',
+                suffix=suffix,
                 delete=False,
                 encoding='utf-8'
             ) as script_file:
@@ -150,18 +154,38 @@ class GrepSearcher:
                     return []
 
                 # 写入脚本
-                script_file.write('#!/bin/bash\n')
-                script_file.write(cmd + '\n')
+                if is_windows:
+                    # Windows 批处理脚本
+                    script_file.write('@echo off\n')
+                    script_file.write('chcp 65001 >nul\n')  # 设置 UTF-8 编码
+                    script_file.write(cmd + '\n')
+                else:
+                    # Linux/Mac bash 脚本
+                    script_file.write('#!/bin/bash\n')
+                    script_file.write(cmd + '\n')
 
             # 执行脚本
-            result = subprocess.run(
-                ['bash', script_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                encoding='utf-8',
-                errors='ignore'
-            )
+            if is_windows:
+                # Windows 上直接执行批处理文件
+                result = subprocess.run(
+                    [script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    encoding='utf-8',
+                    errors='ignore',
+                    shell=True
+                )
+            else:
+                # Linux/Mac 上使用 bash 执行
+                result = subprocess.run(
+                    ['bash', script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
 
             # 删除临时脚本
             try:
@@ -171,7 +195,7 @@ class GrepSearcher:
 
             if result.returncode != 0 and result.returncode != 1:
                 # returncode=1 表示没找到（正常），其他非0是错误
-                logger.error(f"grep错误: {result.stderr}")
+                logger.error(f"搜索错误: {result.stderr}")
                 return []
 
             # 解析输出

@@ -66,11 +66,21 @@ class SearchConfig:
             True 表示可用
         """
         try:
-            result = subprocess.run(
-                [cmd, '--version'],
-                capture_output=True,
-                timeout=5
-            )
+            # Windows 上直接用 shell=True 调用
+            if sys.platform == 'win32':
+                result = subprocess.run(
+                    f'{cmd} --version',
+                    capture_output=True,
+                    timeout=5,
+                    shell=True
+                )
+            else:
+                # Linux/Mac 上使用 bash
+                result = subprocess.run(
+                    ['bash', '-c', f'{cmd} --version'],
+                    capture_output=True,
+                    timeout=5
+                )
             return result.returncode == 0
         except Exception:
             return False

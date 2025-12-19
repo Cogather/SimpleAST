@@ -217,14 +217,35 @@ class BranchAnalyzer:
         condition_text = CppParser.get_node_text(condition_node, source_code)
         line = switch_node.start_point[0] + 1
 
-        # 统计case数量
-        case_count = self._count_nodes(switch_node, ['case_statement'])
+        # 提取所有case标签值
+        case_nodes = self._find_all_nodes(switch_node, 'case_statement')
+        case_values = []
+        for case_node in case_nodes[:10]:  # 最多显示前10个
+            # case语句的第一个子节点通常是值表达式
+            for child in case_node.children:
+                if child.type not in ['case', ':']:
+                    case_value = CppParser.get_node_text(child, source_code).strip()
+                    if case_value:
+                        case_values.append(case_value)
+                    break
+
         has_default = self._count_nodes(switch_node, ['default_statement']) > 0
 
-        suggestions = [
-            f"测试 {case_count} 个case分支",
-            "测试default分支" if has_default else "注意：缺少default分支"
-        ]
+        suggestions = []
+        if case_values:
+            # 显示具体的case值
+            display_values = case_values[:5].copy()
+            if has_default:
+                display_values.append('default')
+
+            case_display = ', '.join(display_values)
+            if len(case_values) > 5:
+                case_display += f' ... 共{len(case_values)}个case'
+            suggestions.append(f"case值: {case_display}")
+        else:
+            suggestions.append(f"测试 {len(case_nodes)} 个case分支")
+            if has_default:
+                suggestions.append("包含default分支")
 
         return BranchCondition(
             line=line,

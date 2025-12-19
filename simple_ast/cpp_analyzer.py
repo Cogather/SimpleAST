@@ -726,10 +726,25 @@ class AnalysisResult:
 
         sig = self.function_signatures[func_name]
 
-        # 检查已知的数据结构（文件内部定义的）
+        # 过滤基础类型的模式（与后面的过滤保持一致）
+        import re
+        basic_type_patterns = [
+            r'^VOS_(VOID|INT|UINT|CHAR|BOOL|LONG|SHORT|DWORD|WORD|BYTE)\d*$',
+            r'^DIAM_(VOID|INT|UINT|CHAR|BOOL|UINT32|INT32)\d*$',
+        ]
+
+        # 检查已知的数据结构（文件内部定义的），但过滤掉基础类型
         for ds_name in self.data_structures.keys():
             if ds_name in sig:
-                used_ds[ds_name] = self.data_structures[ds_name]
+                # 检查是否是基础类型
+                is_basic_type = False
+                for pattern in basic_type_patterns:
+                    if re.match(pattern, ds_name):
+                        is_basic_type = True
+                        break
+
+                if not is_basic_type:
+                    used_ds[ds_name] = self.data_structures[ds_name]
 
         # 通用类型提取：从签名中提取所有可能的类型名
         # 1. 匹配参数类型：类型名 + 指针/引用/空格

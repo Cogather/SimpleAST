@@ -220,7 +220,7 @@ class BranchAnalyzer:
         # 提取所有case标签值
         case_nodes = self._find_all_nodes(switch_node, 'case_statement')
         case_values = []
-        for case_node in case_nodes[:10]:  # 最多显示前10个
+        for case_node in case_nodes:  # 显示所有case值
             # case语句的第一个子节点通常是值表达式
             for child in case_node.children:
                 if child.type not in ['case', ':']:
@@ -233,14 +233,12 @@ class BranchAnalyzer:
 
         suggestions = []
         if case_values:
-            # 显示具体的case值
-            display_values = case_values[:5].copy()
+            # 显示所有case值（不截断）
+            display_values = case_values.copy()
             if has_default:
                 display_values.append('default')
 
             case_display = ', '.join(display_values)
-            if len(case_values) > 5:
-                case_display += f' ... 共{len(case_values)}个case'
             suggestions.append(f"case值: {case_display}")
         else:
             suggestions.append(f"测试 {len(case_nodes)} 个case分支")

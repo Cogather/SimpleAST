@@ -124,6 +124,12 @@ def main():
     log_filename = log_dir / f"analyze_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     log_file = open(log_filename, 'w', encoding='utf-8')
 
+    # 配置 simple_ast 库的日志也使用同一个文件
+    import simple_ast.logger as logger_module
+    lib_logger = logger_module.setup_logger(name="simple_ast", log_file_path=str(log_filename))
+    # 设置为全局默认logger，确保所有 get_logger() 调用都使用这个配置
+    logger_module._default_logger = lib_logger
+
     log(f"日志文件: {log_filename}")
     log("=" * 80)
 

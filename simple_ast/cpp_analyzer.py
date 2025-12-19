@@ -14,12 +14,16 @@ from .analysis_modes import AnalysisMode, get_mode_config, AnalysisModeConfig
 from .single_file_analyzer import SingleFileAnalyzer, FileBoundary
 from .branch_analyzer import BranchAnalyzer, format_branch_analysis
 from .external_classifier import ExternalFunctionClassifier, format_classified_externals
+from .logger import get_logger
+logger = get_logger()
+
 
 
 @dataclass
 class AnalysisResult:
     """Complete analysis result for a C++ file."""
     target_file: str
+    project_root: str  # 项目根目录
     entry_points: List[EntryPointInfo]
     call_chains: Dict[str, CallNode]
     function_signatures: Dict[str, str]  # function_name -> signature
@@ -641,13 +645,13 @@ class AnalysisResult:
 
         # 防止循环依赖
         if func_name in visited:
-            print(f"[递归展开] 跳过已访问函数: {func_name}", file=sys.stderr)
+            logger.info(f"[递归展开] 跳过已访问函数: {func_name}")
             return
         visited.add(func_name)
 
         depth = len(number_prefix.split('.')) if number_prefix else 0
         indent = "  " * depth
-        print(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})", file=sys.stderr)
+        logger.info(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})")
 
         # === 1. 函数签名 ===
         if number_prefix:
@@ -694,7 +698,7 @@ class AnalysisResult:
         if func_name in self.call_chains:
             call_tree = self.call_chains[func_name]
             if call_tree and call_tree.children:
-                print(f"{indent}[递归展开]   找到 {len(call_tree.children)} 个直接调用", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   找到 {len(call_tree.children)} 个直接调用")
                 for child in call_tree.children:
                     if child.is_external:
                         direct_external_deps.add(child.function_name)
@@ -704,18 +708,18 @@ class AnalysisResult:
 
                 internal_count = len(direct_internal_deps)
                 external_count = len(direct_external_deps)
-                print(f"{indent}[递归展开]   分类: 内部{internal_count}个, 外部{external_count}个", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   分类: 内部{internal_count}个, 外部{external_count}个")
             else:
-                print(f"{indent}[递归展开]   无直接调用", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   无直接调用")
         else:
-            print(f"{indent}[递归展开]   警告: 未找到调用链信息", file=sys.stderr)
+            logger.info(f"{indent}[递归展开]   警告: 未找到调用链信息")
 
         # === 4. Mock清单（仅显示业务外部依赖，并搜索签名） ===
         if direct_external_deps:
             # 使用分类器分类外部函数
             classified = self.external_classifier.classify(direct_external_deps)
 
-            print(f"{indent}[Mock生成] 外部函数分类: 业务{len(classified.get('business', []))}个, 标准库{len(classified.get('standard_lib', []))}个, 日志{len(classified.get('logging', []))}个", file=sys.stderr)
+            logger.info(f"{indent}[Mock生成] 外部函数分类: 业务{len(classified.get('business', []))}个, 标准库{len(classified.get('standard_lib', []))}个, 日志{len(classified.get('logging', []))}个")
 
             # 仅显示业务外部依赖（隐藏标准库和日志函数）
             if classified['business']:
@@ -725,14 +729,14 @@ class AnalysisResult:
                     signature = self._search_function_signature(func)
                     if signature:
                         lines.append(f"  {func}: {signature}")
-                        print(f"{indent}[Mock生成]   ✓ {func}: 找到签名", file=sys.stderr)
+                        logger.info(f"{indent}[Mock生成]   ✓ {func}: 找到签名")
                     else:
                         lines.append(f"  {func}")
-                        print(f"{indent}[Mock生成]   ✗ {func}: 未找到签名", file=sys.stderr)
+                        logger.info(f"{indent}[Mock生成]   ✗ {func}: 未找到签名")
             else:
-                print(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）", file=sys.stderr)
+                logger.info(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）")
         else:
-            print(f"{indent}[Mock生成] 无外部依赖", file=sys.stderr)
+            logger.info(f"{indent}[Mock生成] 无外部依赖")
 
         # === 5. 数据结构 - 只列出名称，收集到 all_data_structures ===
         used_data_structures = self._extract_data_structures_from_single_function(func_name)
@@ -766,8 +770,8 @@ class AnalysisResult:
             return used_ds
 
         sig = self.function_signatures[func_name]
-        print(f"\n[数据结构提取] 分析函数: {func_name}", file=sys.stderr)
-        print(f"[数据结构提取] 签名: {sig[:100]}...", file=sys.stderr)
+        logger.info(f"\n[数据结构提取] 分析函数: {func_name}")
+        logger.info(f"[数据结构提取] 签名: {sig[:100]}...")
 
         # 过滤基础类型的模式（与后面的过滤保持一致）
         import re
@@ -786,16 +790,16 @@ class AnalysisResult:
                 for pattern in basic_type_patterns:
                     if re.match(pattern, ds_name):
                         is_basic_type = True
-                        print(f"[数据结构提取] ✗ 过滤基础类型: {ds_name} (匹配模式: {pattern})", file=sys.stderr)
+                        logger.info(f"[数据结构提取] ✗ 过滤基础类型: {ds_name} (匹配模式: {pattern})")
                         filtered_count += 1
                         break
 
                 if not is_basic_type:
                     used_ds[ds_name] = self.data_structures[ds_name]
-                    print(f"[数据结构提取] ✓ 内部结构: {ds_name}", file=sys.stderr)
+                    logger.info(f"[数据结构提取] ✓ 内部结构: {ds_name}")
                     internal_count += 1
 
-        print(f"[数据结构提取] 内部结构: 找到 {internal_count} 个, 过滤 {filtered_count} 个", file=sys.stderr)
+        logger.info(f"[数据结构提取] 内部结构: 找到 {internal_count} 个, 过滤 {filtered_count} 个")
 
         # 通用类型提取：从签名中提取所有可能的类型名
         # 1. 匹配参数类型：类型名 + 指针/引用/空格
@@ -810,9 +814,9 @@ class AnalysisResult:
 
         # 合并所有匹配
         all_types = set(type_matches + class_matches)
-        print(f"[数据结构提取] 正则提取: {len(type_matches)} 个参数类型, {len(class_matches)} 个类名", file=sys.stderr)
+        logger.info(f"[数据结构提取] 正则提取: {len(type_matches)} 个参数类型, {len(class_matches)} 个类名")
         if all_types:
-            print(f"[数据结构提取] 待过滤类型: {sorted(all_types)}", file=sys.stderr)
+            logger.info(f"[数据结构提取] 待过滤类型: {sorted(all_types)}")
 
         # 去重并过滤掉明显不是类型的关键字和基础类型
         # 1. C++关键字
@@ -839,7 +843,7 @@ class AnalysisResult:
         for type_name in all_types:
             # 跳过C++关键字
             if type_name.upper() in keywords or type_name.upper() in basic_typedefs:
-                print(f"[数据结构提取] ✗ 过滤关键字/基础typedef: {type_name}", file=sys.stderr)
+                logger.info(f"[数据结构提取] ✗ 过滤关键字/基础typedef: {type_name}")
                 external_filtered += 1
                 continue
 
@@ -857,17 +861,17 @@ class AnalysisResult:
                     break
 
             if is_basic_type:
-                print(f"[数据结构提取] ✗ 过滤项目基础类型: {type_name} (匹配: {matched_pattern})", file=sys.stderr)
+                logger.info(f"[数据结构提取] ✗ 过滤项目基础类型: {type_name} (匹配: {matched_pattern})")
                 external_filtered += 1
                 continue
 
             # 添加为外部类型（后续会尝试查找定义）
             used_ds[type_name] = None
-            print(f"[数据结构提取] ✓ 外部类型: {type_name}", file=sys.stderr)
+            logger.info(f"[数据结构提取] ✓ 外部类型: {type_name}")
             external_count += 1
 
-        print(f"[数据结构提取] 外部类型: 找到 {external_count} 个, 过滤 {external_filtered} 个", file=sys.stderr)
-        print(f"[数据结构提取] 总计: {len(used_ds)} 个数据结构 (内部 {internal_count} + 外部 {external_count})", file=sys.stderr)
+        logger.info(f"[数据结构提取] 外部类型: 找到 {external_count} 个, 过滤 {external_filtered} 个")
+        logger.info(f"[数据结构提取] 总计: {len(used_ds)} 个数据结构 (内部 {internal_count} + 外部 {external_count})")
 
         return used_ds
 
@@ -1099,10 +1103,10 @@ class AnalysisResult:
         import sys
 
         if func_name not in self.function_signatures:
-            print(f"[常量提取] 警告: 函数 {func_name} 不在签名列表中", file=sys.stderr)
+            logger.info(f"[常量提取] 警告: 函数 {func_name} 不在签名列表中")
             return {}
 
-        print(f"\n[常量提取] 开始分析函数: {func_name}", file=sys.stderr)
+        logger.info(f"\n[常量提取] 开始分析函数: {func_name}")
 
         # 从函数签名和分支条件中提取标识符
         identifiers = set()
@@ -1112,19 +1116,19 @@ class AnalysisResult:
         # 提取大写标识符（通常是常量/宏）
         upper_identifiers = re.findall(r'\b[A-Z][A-Z0-9_]+\b', sig)
         identifiers.update(upper_identifiers)
-        print(f"[常量提取] 从签名提取到 {len(upper_identifiers)} 个大写标识符: {upper_identifiers[:10]}", file=sys.stderr)
+        logger.info(f"[常量提取] 从签名提取到 {len(upper_identifiers)} 个大写标识符: {upper_identifiers[:10]}")
 
         # 2. 从分支条件提取
         branch_count = 0
         if hasattr(self, 'branch_analyses') and self.branch_analyses and func_name in self.branch_analyses:
             branch_analysis = self.branch_analyses[func_name]
-            print(f"[常量提取] 找到分支分析，共 {len(branch_analysis.conditions)} 个条件", file=sys.stderr)
+            logger.info(f"[常量提取] 找到分支分析，共 {len(branch_analysis.conditions)} 个条件")
 
             for idx, condition in enumerate(branch_analysis.conditions):
                 # 从条件本身提取
                 upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', condition.condition)
                 identifiers.update(upper_ids)
-                print(f"[常量提取]   条件{idx+1} [{condition.branch_type}]: 提取 {len(upper_ids)} 个标识符", file=sys.stderr)
+                logger.info(f"[常量提取]   条件{idx+1} [{condition.branch_type}]: 提取 {len(upper_ids)} 个标识符")
 
                 # 从switch的suggestions中提取case值
                 if condition.branch_type == 'switch' and condition.suggestions:
@@ -1134,7 +1138,7 @@ class AnalysisResult:
                             case_values_str = sug.replace('case值:', '').strip()
                             # 提取每个case值
                             case_values = [v.strip() for v in case_values_str.split(',')]
-                            print(f"[常量提取]   switch找到 {len(case_values)} 个case值: {case_values}", file=sys.stderr)
+                            logger.info(f"[常量提取]   switch找到 {len(case_values)} 个case值: {case_values}")
                             for case_val in case_values:
                                 # 移除" ... 共X个case"后缀
                                 if '...' in case_val:
@@ -1144,13 +1148,13 @@ class AnalysisResult:
                                     identifiers.add(case_val)
                     branch_count += 1
         else:
-            print(f"[常量提取] 未找到分支分析数据", file=sys.stderr)
+            logger.info(f"[常量提取] 未找到分支分析数据")
 
         if not identifiers:
-            print(f"[常量提取] 没有提取到任何标识符", file=sys.stderr)
+            logger.info(f"[常量提取] 没有提取到任何标识符")
             return {}
 
-        print(f"[常量提取] 总共提取到 {len(identifiers)} 个唯一标识符", file=sys.stderr)
+        logger.info(f"[常量提取] 总共提取到 {len(identifiers)} 个唯一标识符")
 
         # 在头文件中搜索这些标识符的定义
         constants = {}
@@ -1203,11 +1207,11 @@ class AnalysisResult:
             if current_dir == current_dir.parent:
                 break
 
-        print(f"[常量提取] 准备搜索 {min(len(possible_headers), 50)} 个文件 (共找到 {len(possible_headers)} 个)", file=sys.stderr)
+        logger.info(f"[常量提取] 准备搜索 {min(len(possible_headers), 50)} 个文件 (共找到 {len(possible_headers)} 个)")
         for h in possible_headers[:10]:
-            print(f"[常量提取]   - {h.name}", file=sys.stderr)
+            logger.info(f"[常量提取]   - {h.name}")
         if len(possible_headers) > 10:
-            print(f"[常量提取]   ... 还有 {len(possible_headers) - 10} 个文件", file=sys.stderr)
+            logger.info(f"[常量提取]   ... 还有 {len(possible_headers) - 10} 个文件")
 
         # 搜索定义（限制搜索范围避免太慢）
         search_limit = min(len(possible_headers), 50)  # 最多搜索50个文件
@@ -1219,27 +1223,27 @@ class AnalysisResult:
                             # 搜索 #define 或 enum
                             if re.search(rf'^\s*#define\s+{re.escape(identifier)}\b', line):
                                 constants[identifier] = line.strip()
-                                print(f"[常量提取] ✓ 在 {header_file.name} 找到 #define {identifier}", file=sys.stderr)
+                                logger.info(f"[常量提取] ✓ 在 {header_file.name} 找到 #define {identifier}")
                                 break
                             elif re.search(rf'^\s*{re.escape(identifier)}\s*=', line):
                                 # enum 成员
                                 constants[identifier] = line.strip()
-                                print(f"[常量提取] ✓ 在 {header_file.name} 找到 enum {identifier}", file=sys.stderr)
+                                logger.info(f"[常量提取] ✓ 在 {header_file.name} 找到 enum {identifier}")
                                 break
 
                     if identifier in constants:
                         break
 
                 except Exception as e:
-                    print(f"[常量提取] ✗ 读取 {header_file.name} 失败: {e}", file=sys.stderr)
+                    logger.info(f"[常量提取] ✗ 读取 {header_file.name} 失败: {e}")
                     continue
 
         # 统计结果
         found_count = len(constants)
         not_found = identifiers - set(constants.keys())
-        print(f"[常量提取] 完成: 找到 {found_count}/{len(identifiers)} 个定义", file=sys.stderr)
+        logger.info(f"[常量提取] 完成: 找到 {found_count}/{len(identifiers)} 个定义")
         if not_found and len(not_found) <= 10:
-            print(f"[常量提取] 未找到: {sorted(not_found)}", file=sys.stderr)
+            logger.info(f"[常量提取] 未找到: {sorted(not_found)}")
 
         return constants
 
@@ -1475,6 +1479,7 @@ class CppProjectAnalyzer:
         # 创建结果
         result = AnalysisResult(
             target_file=str(target_path),
+            project_root=str(self.project_root),
             entry_points=entry_points,
             call_chains=call_chains,
             function_signatures=function_signatures,
@@ -1578,6 +1583,7 @@ class CppProjectAnalyzer:
         # Create result
         result = AnalysisResult(
             target_file=rel_path,
+            project_root=str(self.project_root),
             entry_points=entry_points,
             call_chains=call_chains,
             function_signatures=function_signatures,

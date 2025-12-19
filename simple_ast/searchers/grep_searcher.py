@@ -5,10 +5,15 @@
 """
 import subprocess
 import re
+import tempfile
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 import sys
 from .search_config import get_search_config
+from ..logger import get_logger
+
+logger = get_logger()
 
 
 class GrepSearcher:
@@ -68,14 +73,14 @@ class GrepSearcher:
                 if result.returncode == 1:
                     return []  # 没找到
                 else:
-                    print(f"[grep错误] {result.stderr}", file=sys.stderr)
+                    logger.error(f"grep错误: {result.stderr}")
                     return []
 
         except subprocess.TimeoutExpired:
-            print(f"[grep超时] 搜索 {pattern} 超时", file=sys.stderr)
+            logger.error(f"grep超时: 搜索 {pattern} 超时")
             return []
         except Exception as e:
-            print(f"[grep异常] {e}", file=sys.stderr)
+            logger.error(f"grep异常: {e}")
             return []
 
     def search_content(
@@ -88,6 +93,154 @@ class GrepSearcher:
     ) -> List[Tuple[Path, int, str]]:
         """
         搜索匹配的内容（带行号）
+
+        Args:
+            pattern: 正则表达式模式
+            file_glob: 文件匹配模式
+            max_results: 最多返回结果数
+            show_line_numbers: 是否显示行号
+            context_lines: 上下文行数（0 表示不显示上下文）
+
+        Returns:
+            列表：[(文件路径, 行号, 匹配的行内容), ...]
+        """
+        # 使用脚本文件方式执行，避免参数传递问题
+        return self._search_via_script(
+            pattern=pattern,
+            file_glob=file_glob,
+            max_results=max_results,
+            show_line_numbers=show_line_numbers
+        )
+
+    def _search_via_script(
+        self,
+        pattern: str,
+        file_glob: str,
+        max_results: int,
+        show_line_numbers: bool
+    ) -> List[Tuple[Path, int, str]]:
+        """
+        通过临时脚本文件执行搜索，避免参数传递和转义问题
+
+        Args:
+            pattern: 搜索模式
+            file_glob: 文件通配符
+            max_results: 最大结果数
+            show_line_numbers: 是否显示行号
+
+        Returns:
+            匹配结果列表
+        """
+        try:
+            # 创建临时脚本文件
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix='.sh',
+                delete=False,
+                encoding='utf-8'
+            ) as script_file:
+                script_path = script_file.name
+
+                # 根据工具类型构建命令
+                if self.config.command == 'grep':
+                    cmd = f'grep -r -E -n --include="{file_glob}" "{pattern}" "{self.project_root}"'
+                elif self.config.command == 'rg':
+                    cmd = f'rg -n --glob="{file_glob}" "{pattern}" "{self.project_root}"'
+                else:
+                    return []
+
+                # 写入脚本
+                script_file.write('#!/bin/bash\n')
+                script_file.write(cmd + '\n')
+
+            # 执行脚本
+            result = subprocess.run(
+                ['bash', script_path],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding='utf-8',
+                errors='ignore'
+            )
+
+            # 删除临时脚本
+            try:
+                os.unlink(script_path)
+            except:
+                pass
+
+            if result.returncode != 0 and result.returncode != 1:
+                # returncode=1 表示没找到（正常），其他非0是错误
+                logger.error(f"grep错误: {result.stderr}")
+                return []
+
+            # 解析输出
+            matches = []
+            for line in result.stdout.splitlines()[:max_results]:
+                parsed = self._parse_grep_line(line)
+                if parsed:
+                    matches.append(parsed)
+
+            return matches
+
+        except Exception as e:
+            logger.error(f"脚本搜索异常: {e}")
+            return []
+
+    def _parse_grep_line(self, line: str) -> Optional[Tuple[Path, int, str]]:
+        """
+        解析 grep 输出的一行
+
+        Args:
+            line: grep 输出行
+
+        Returns:
+            (文件路径, 行号, 内容) 或 None
+        """
+        # Windows路径处理：检查是否以盘符开头 (如 D:\)
+        if len(line) > 2 and line[1] == ':' and line[2] in ('\\', '/'):
+            # Windows绝对路径，找第3个冒号(文件路径后的冒号)
+            # 格式: D:\path\file.h:123:content
+            colon_positions = [i for i, c in enumerate(line) if c == ':']
+            if len(colon_positions) >= 2:
+                # 第一个冒号是盘符，第二个是行号前，第三个（如果有）是content前
+                file_path_end = colon_positions[1]
+                file_path = Path(line[:file_path_end])
+
+                remaining = line[file_path_end + 1:]  # 跳过第二个冒号
+                parts = remaining.split(':', 1)  # 分成 line_num 和 content
+
+                if len(parts) >= 2:
+                    try:
+                        line_num = int(parts[0])
+                        content = parts[1]
+                        return (file_path, line_num, content)
+                    except ValueError:
+                        pass
+        else:
+            # Unix路径或相对路径，使用原有逻辑
+            parts = line.split(':', 2)
+            if len(parts) >= 3:
+                file_path = Path(parts[0])
+                try:
+                    line_num = int(parts[1])
+                    content = parts[2]
+                    return (file_path, line_num, content)
+                except ValueError:
+                    pass
+
+        return None
+
+    def search_content_old(
+        self,
+        pattern: str,
+        file_glob: str = '*.h',
+        max_results: int = 10,
+        show_line_numbers: bool = True,
+        context_lines: int = 0
+    ) -> List[Tuple[Path, int, str]]:
+        """
+        搜索匹配的内容（带行号）- 原始方法（保留作为备份）
 
         Args:
             pattern: 正则表达式模式
@@ -167,7 +320,7 @@ class GrepSearcher:
             return matches
 
         except Exception as e:
-            print(f"[grep异常] {e}", file=sys.stderr)
+            logger.error(f"grep异常: {e}")
             return []
 
     def search_first_match(
@@ -277,7 +430,7 @@ class GrepSearcher:
                 return f"// 来自: {file_path.name}:{start_idx + 1}\n{definition}"
 
         except Exception as e:
-            print(f"[文件读取错误] {file_path}: {e}", file=sys.stderr)
+            logger.error(f"文件读取错误 {file_path}: {e}")
             return None
 
     def _find_struct_start(self, lines: list, end_idx: int) -> Optional[int]:

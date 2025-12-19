@@ -14,6 +14,9 @@ import sys
 from typing import Dict, List, Set, Optional
 from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor
 from ..searchers import HeaderSearcher
+from ..logger import get_logger
+logger = get_logger()
+
 
 
 class FunctionReporter:
@@ -28,11 +31,16 @@ class FunctionReporter:
         self.result = result
         self.config = config or {}
 
-        # 创建提取器（共享 HeaderSearcher）
+        # 使用 AnalysisResult 中的项目根目录
+        project_root = result.project_root if hasattr(result, 'project_root') else "."
+
+        # 创建提取器
         header_searcher = HeaderSearcher()
-        self.constant_extractor = ConstantExtractor(header_searcher)
+        self.constant_extractor = ConstantExtractor(header_searcher, project_root=project_root)
         self.signature_extractor = SignatureExtractor(header_searcher)
-        self.structure_extractor = StructureExtractor(header_searcher)
+
+        # StructureExtractor 使用全局搜索
+        self.structure_extractor = StructureExtractor(project_root=project_root)
 
     def generate(self, func_name: str) -> str:
         """
@@ -105,13 +113,13 @@ class FunctionReporter:
         """递归生成函数信息（带序号层级）"""
         # 防止循环依赖
         if func_name in visited:
-            print(f"[递归展开] 跳过已访问函数: {func_name}", file=sys.stderr)
+            logger.info(f"[递归展开] 跳过已访问函数: {func_name}")
             return
         visited.add(func_name)
 
         depth = len(number_prefix.split('.')) if number_prefix else 0
         indent = "  " * depth
-        print(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})", file=sys.stderr)
+        logger.info(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})")
 
         # === 1. 函数签名 ===
         if number_prefix:
@@ -157,7 +165,7 @@ class FunctionReporter:
         if func_name in self.result.call_chains:
             call_tree = self.result.call_chains[func_name]
             if call_tree and call_tree.children:
-                print(f"{indent}[递归展开]   找到 {len(call_tree.children)} 个直接调用", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   找到 {len(call_tree.children)} 个直接调用")
                 for child in call_tree.children:
                     if child.is_external:
                         direct_external_deps.add(child.function_name)
@@ -167,11 +175,11 @@ class FunctionReporter:
 
                 internal_count = len(direct_internal_deps)
                 external_count = len(direct_external_deps)
-                print(f"{indent}[递归展开]   分类: 内部{internal_count}个, 外部{external_count}个", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   分类: 内部{internal_count}个, 外部{external_count}个")
             else:
-                print(f"{indent}[递归展开]   无直接调用", file=sys.stderr)
+                logger.info(f"{indent}[递归展开]   无直接调用")
         else:
-            print(f"{indent}[递归展开]   警告: 未找到调用链信息", file=sys.stderr)
+            logger.info(f"{indent}[递归展开]   警告: 未找到调用链信息")
 
         # === 4. Mock清单（仅显示业务外部依赖，并搜索签名） ===
         if direct_external_deps:
@@ -190,14 +198,14 @@ class FunctionReporter:
                     signature = self.signature_extractor.extract(func, self.result.target_file)
                     if signature:
                         lines.append(f"  {func}: {signature}")
-                        print(f"{indent}[Mock生成]   ✓ {func}: 找到签名", file=sys.stderr)
+                        logger.info(f"{indent}[Mock生成]   ✓ {func}: 找到签名")
                     else:
                         lines.append(f"  {func}")
-                        print(f"{indent}[Mock生成]   ✗ {func}: 未找到签名", file=sys.stderr)
+                        logger.info(f"{indent}[Mock生成]   ✗ {func}: 未找到签名")
             else:
-                print(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）", file=sys.stderr)
+                logger.info(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）")
         else:
-            print(f"{indent}[Mock生成] 无外部依赖", file=sys.stderr)
+            logger.info(f"{indent}[Mock生成] 无外部依赖")
 
         # === 5. 数据结构 - 只列出名称，收集到 all_data_structures ===
         used_data_structures = self._extract_data_structures_from_single_function(func_name)
@@ -223,7 +231,7 @@ class FunctionReporter:
                 )
 
     def _extract_data_structures_from_single_function(self, func_name: str):
-        """从单个函数签名中提取使用的数据结构"""
+        """从单个函数签名和边界分析中提取使用的数据结构"""
         import re
         used_ds = {}
 
@@ -231,8 +239,8 @@ class FunctionReporter:
             return used_ds
 
         sig = self.result.function_signatures[func_name]
-        print(f"\n[数据结构提取] 分析函数: {func_name}", file=sys.stderr)
-        print(f"[数据结构提取] 签名: {sig[:100]}...", file=sys.stderr)
+        logger.info(f"\n[数据结构提取] 分析函数: {func_name}")
+        logger.info(f"[数据结构提取] 签名: {sig[:100]}...")
 
         # 过滤基础类型的模式
         basic_type_patterns = [
@@ -250,16 +258,16 @@ class FunctionReporter:
                 for pattern in basic_type_patterns:
                     if re.match(pattern, ds_name):
                         is_basic_type = True
-                        print(f"[数据结构提取] ✗ 过滤基础类型: {ds_name} (匹配模式: {pattern})", file=sys.stderr)
+                        logger.info(f"[数据结构提取] ✗ 过滤基础类型: {ds_name} (匹配模式: {pattern})")
                         filtered_count += 1
                         break
 
                 if not is_basic_type:
                     used_ds[ds_name] = self.result.data_structures[ds_name]
-                    print(f"[数据结构提取] ✓ 内部结构: {ds_name}", file=sys.stderr)
+                    logger.info(f"[数据结构提取] ✓ 内部结构: {ds_name}")
                     internal_count += 1
 
-        print(f"[数据结构提取] 内部结构: 找到 {internal_count} 个, 过滤 {filtered_count} 个", file=sys.stderr)
+        logger.info(f"[数据结构提取] 内部结构: 找到 {internal_count} 个, 过滤 {filtered_count} 个")
 
         # 通用类型提取：从签名中提取所有可能的类型名
         # 1. 匹配参数类型：类型名 + 指针/引用/空格
@@ -272,9 +280,18 @@ class FunctionReporter:
 
         # 合并所有匹配
         all_types = set(type_matches + class_matches)
-        print(f"[数据结构提取] 正则提取: {len(type_matches)} 个参数类型, {len(class_matches)} 个类名", file=sys.stderr)
+
+        # 3. 如果有边界分析结果，添加边界中检测到的外部数据结构
+        boundary_types_count = 0
+        if self.result.file_boundary and hasattr(self.result.file_boundary, 'external_data_structures'):
+            boundary_types = self.result.file_boundary.external_data_structures
+            all_types.update(boundary_types)
+            boundary_types_count = len(boundary_types)
+            logger.info(f"[数据结构提取] 边界分析: 找到 {boundary_types_count} 个外部类型")
+
+        logger.info(f"[数据结构提取] 正则提取: {len(type_matches)} 个参数类型, {len(class_matches)} 个类名, 边界分析 {boundary_types_count} 个")
         if all_types:
-            print(f"[数据结构提取] 待过滤类型: {sorted(all_types)}", file=sys.stderr)
+            logger.info(f"[数据结构提取] 待过滤类型: {sorted(all_types)}")
 
         # 过滤关键字和基础类型
         keywords = {'VOID', 'INT', 'CHAR', 'BOOL', 'FLOAT', 'DOUBLE', 'LONG', 'SHORT',
@@ -289,7 +306,7 @@ class FunctionReporter:
         for type_name in all_types:
             # 跳过关键字和基础typedef
             if type_name.upper() in keywords or type_name.upper() in basic_typedefs:
-                print(f"[数据结构提取] ✗ 过滤关键字/基础typedef: {type_name}", file=sys.stderr)
+                logger.info(f"[数据结构提取] ✗ 过滤关键字/基础typedef: {type_name}")
                 external_filtered += 1
                 continue
 
@@ -302,17 +319,17 @@ class FunctionReporter:
             for pattern in basic_type_patterns:
                 if re.match(pattern, type_name):
                     is_basic_type = True
-                    print(f"[数据结构提取] ✗ 过滤项目基础类型: {type_name}", file=sys.stderr)
+                    logger.info(f"[数据结构提取] ✗ 过滤项目基础类型: {type_name}")
                     external_filtered += 1
                     break
 
             if not is_basic_type:
                 # 添加为外部类型
                 used_ds[type_name] = None
-                print(f"[数据结构提取] ✓ 外部类型: {type_name}", file=sys.stderr)
+                logger.info(f"[数据结构提取] ✓ 外部类型: {type_name}")
                 external_count += 1
 
-        print(f"[数据结构提取] 外部类型: 找到 {external_count} 个, 过滤 {external_filtered} 个", file=sys.stderr)
-        print(f"[数据结构提取] 总计: {len(used_ds)} 个数据结构 (内部 {internal_count} + 外部 {external_count})", file=sys.stderr)
+        logger.info(f"[数据结构提取] 外部类型: 找到 {external_count} 个, 过滤 {external_filtered} 个")
+        logger.info(f"[数据结构提取] 总计: {len(used_ds)} 个数据结构 (内部 {internal_count} + 外部 {external_count})")
 
         return used_ds

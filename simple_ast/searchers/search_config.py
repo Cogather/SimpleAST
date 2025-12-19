@@ -8,6 +8,9 @@ import sys
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+from ..logger import get_logger
+
+logger = get_logger()
 
 
 class SearchTool(Enum):
@@ -36,12 +39,12 @@ class SearchConfig:
             if self._check_tool_available('rg'):
                 self.tool = SearchTool.RIPGREP
                 self.command = 'rg'
-                print(f"[搜索配置] 检测到 ripgrep，使用: rg", file=sys.stderr)
+                logger.info("检测到 ripgrep，使用: rg")
             # 其次使用 grep
             elif self._check_tool_available('grep'):
                 self.tool = SearchTool.GREP
                 self.command = 'grep'
-                print(f"[搜索配置] 检测到 grep，使用: grep", file=sys.stderr)
+                logger.info("检测到 grep，使用: grep")
             else:
                 raise RuntimeError("未检测到可用的搜索工具 (grep 或 ripgrep)")
         else:
@@ -50,7 +53,7 @@ class SearchConfig:
             if not self._check_tool_available(cmd):
                 raise RuntimeError(f"指定的搜索工具不可用: {cmd}")
             self.command = cmd
-            print(f"[搜索配置] 使用指定的搜索工具: {cmd}", file=sys.stderr)
+            logger.info(f"使用指定的搜索工具: {cmd}")
 
     def _check_tool_available(self, cmd: str) -> bool:
         """

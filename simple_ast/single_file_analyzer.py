@@ -225,7 +225,7 @@ class SingleFileAnalyzer:
 
     def _analyze_data_structure_usage(self, root_node, source_code: bytes):
         """分析数据结构使用，区分内部和外部"""
-        # 查找所有类型标识符
+        # 1. 查找所有类型标识符（包括变量声明、参数等）
         type_identifiers = CppParser.find_nodes_by_type(root_node, 'type_identifier')
 
         for type_node in type_identifiers:
@@ -242,6 +242,28 @@ class SingleFileAnalyzer:
             else:
                 # 外部数据结构
                 self.external_data_structures.add(type_name)
+
+        # 2. 查找类型转换中的类型：(Type *)expr
+        cast_expressions = CppParser.find_nodes_by_type(root_node, 'cast_expression')
+
+        for cast_node in cast_expressions:
+            # 提取类型描述符节点
+            type_desc = cast_node.child_by_field_name('type')
+            if type_desc:
+                # 查找 type_identifier
+                type_ids = CppParser.find_nodes_by_type(type_desc, 'type_identifier')
+                for type_node in type_ids:
+                    type_name = CppParser.get_node_text(type_node, source_code)
+
+                    # 过滤标准库类型
+                    if self._is_standard_library_type(type_name):
+                        continue
+
+                    # 判断是内部还是外部
+                    if type_name in self.file_data_structures:
+                        pass
+                    else:
+                        self.external_data_structures.add(type_name)
 
     def _is_standard_library_function(self, func_name: str) -> bool:
         """判断是否是标准库函数"""

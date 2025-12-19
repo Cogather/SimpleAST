@@ -5,6 +5,9 @@
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from .cpp_parser import CppParser
+from .logger import get_logger
+
+logger = get_logger()
 
 
 @dataclass
@@ -58,12 +61,12 @@ class BranchAnalyzer:
             else:
                 func_name = CppParser.get_node_text(declarator, source_code)
 
-        print(f"\n[分支分析] 开始分析函数: {func_name}", file=sys.stderr)
+        logger.info(f"\n[分支分析] 开始分析函数: {func_name}")
 
         # 获取函数体
         body_node = self._get_function_body(func_node)
         if not body_node:
-            print(f"[分支分析] 未找到函数体", file=sys.stderr)
+            logger.info("[分支分析] 未找到函数体")
             return BranchAnalysis(1, 0, 0, 0, 0, 0, [])
 
         # 统计各类分支
@@ -73,7 +76,7 @@ class BranchAnalyzer:
         loop_count = self._count_nodes(body_node, ['for_statement', 'while_statement', 'do_statement'])
         early_return_count = self._count_early_returns(body_node)
 
-        print(f"[分支分析] 统计: if={if_count}, switch={switch_count}, case={switch_cases}, loop={loop_count}, early_return={early_return_count}", file=sys.stderr)
+        logger.info(f"[分支分析] 统计: if={if_count}, switch={switch_count}, case={switch_cases}, loop={loop_count}, early_return={early_return_count}")
 
         # 计算圈复杂度：1 + 决策点数量
         # 决策点包括：if, while, for, case, &&, ||, ?:
@@ -83,11 +86,11 @@ class BranchAnalyzer:
         decision_points += logical_ops + ternary_ops
 
         cyclomatic = 1 + decision_points
-        print(f"[分支分析] 圈复杂度: {cyclomatic} (基础1 + 决策点{decision_points}, 逻辑运算符{logical_ops}, 三元运算{ternary_ops})", file=sys.stderr)
+        logger.info(f"[分支分析] 圈复杂度: {cyclomatic} (基础1 + 决策点{decision_points}, 逻辑运算符{logical_ops}, 三元运算{ternary_ops})")
 
         # 提取关键分支条件
         conditions = self._extract_key_conditions(body_node, source_code)
-        print(f"[分支分析] 提取了 {len(conditions)} 个关键条件", file=sys.stderr)
+        logger.info(f"[分支分析] 提取了 {len(conditions)} 个关键条件")
 
         return BranchAnalysis(
             cyclomatic_complexity=cyclomatic,
@@ -240,12 +243,12 @@ class BranchAnalyzer:
         condition_text = CppParser.get_node_text(condition_node, source_code)
         line = switch_node.start_point[0] + 1
 
-        print(f"[分支分析]   分析switch: 行{line}, 条件={condition_text}", file=sys.stderr)
+        logger.info(f"[分支分析]   分析switch: 行{line}, 条件={condition_text}")
 
         # 提取所有case标签值
         case_nodes = self._find_all_nodes(switch_node, 'case_statement')
         case_values = []
-        print(f"[分支分析]     找到 {len(case_nodes)} 个case节点", file=sys.stderr)
+        logger.info(f"[分支分析]     找到 {len(case_nodes)} 个case节点")
 
         for idx, case_node in enumerate(case_nodes):  # 显示所有case值
             # case语句的第一个子节点通常是值表达式
@@ -255,14 +258,14 @@ class BranchAnalyzer:
                     if case_value:
                         case_values.append(case_value)
                         if idx < 5:  # 只打印前5个，避免日志过长
-                            print(f"[分支分析]       case {idx+1}: {case_value}", file=sys.stderr)
+                            logger.info(f"[分支分析]       case {idx+1}: {case_value}")
                     break
 
         if len(case_values) > 5:
-            print(f"[分支分析]       ... 还有 {len(case_values)-5} 个case", file=sys.stderr)
+            logger.info(f"[分支分析]       ... 还有 {len(case_values)-5} 个case")
 
         has_default = self._count_nodes(switch_node, ['default_statement']) > 0
-        print(f"[分支分析]     有default分支: {has_default}", file=sys.stderr)
+        logger.info(f"[分支分析]     有default分支: {has_default}")
 
         suggestions = []
         if case_values:
@@ -273,7 +276,7 @@ class BranchAnalyzer:
 
             case_display = ', '.join(display_values)
             suggestions.append(f"case值: {case_display}")
-            print(f"[分支分析]     生成建议: {len(display_values)} 个case值", file=sys.stderr)
+            logger.info(f"[分支分析]     生成建议: {len(display_values)} 个case值")
         else:
             suggestions.append(f"测试 {len(case_nodes)} 个case分支")
             if has_default:

@@ -745,13 +745,43 @@ class AnalysisResult:
         # 合并所有匹配
         all_types = set(type_matches + class_matches)
 
-        # 去重并过滤掉明显不是类型的关键字
-        keywords = {'VOID', 'UINT32', 'INT', 'CHAR', 'BOOL', 'FLOAT', 'DOUBLE',
-                   'CONST', 'STATIC', 'INLINE', 'VIRTUAL', 'EXPLICIT', 'TYPEDEF'}
+        # 去重并过滤掉明显不是类型的关键字和基础类型
+        # 1. C++关键字
+        keywords = {'VOID', 'INT', 'CHAR', 'BOOL', 'FLOAT', 'DOUBLE', 'LONG', 'SHORT',
+                   'CONST', 'STATIC', 'INLINE', 'VIRTUAL', 'EXPLICIT', 'TYPEDEF',
+                   'UNSIGNED', 'SIGNED'}
+
+        # 2. 常见的typedef基础类型（通常不需要显示定义）
+        basic_typedefs = {'UINT8', 'UINT16', 'UINT32', 'UINT64',
+                         'INT8', 'INT16', 'INT32', 'INT64',
+                         'DWORD', 'WORD', 'BYTE', 'SIZE_T'}
+
+        # 3. 项目特定的基础类型模式（VOS_VOID, VOS_UINT32等）
+        # 匹配：VOS_XXX, DIAM_UINT32 等基础类型
+        basic_type_patterns = [
+            r'^VOS_(VOID|INT|UINT|CHAR|BOOL|LONG|SHORT|DWORD|WORD|BYTE)\d*$',
+            r'^DIAM_(VOID|INT|UINT|CHAR|BOOL|UINT32|INT32)\d*$',
+            r'^(Above|Below|Mod|Add|Del)$',  # 注释标记词
+            r'^[A-Z]{1,3}\d{10,}$',  # DTS编号（如DTS2014111810080）
+        ]
 
         for type_name in all_types:
-            # 跳过C++关键字和已经添加的
-            if type_name.upper() in keywords or type_name in used_ds:
+            # 跳过C++关键字
+            if type_name.upper() in keywords or type_name.upper() in basic_typedefs:
+                continue
+
+            # 跳过已添加的
+            if type_name in used_ds:
+                continue
+
+            # 跳过基础类型模式
+            is_basic_type = False
+            for pattern in basic_type_patterns:
+                if re.match(pattern, type_name):
+                    is_basic_type = True
+                    break
+
+            if is_basic_type:
                 continue
 
             # 添加为外部类型（后续会尝试查找定义）
@@ -947,8 +977,25 @@ class AnalysisResult:
         if hasattr(self, 'branch_analyses') and self.branch_analyses and func_name in self.branch_analyses:
             branch_analysis = self.branch_analyses[func_name]
             for condition in branch_analysis.conditions:
+                # 从条件本身提取
                 upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', condition.condition)
                 identifiers.update(upper_ids)
+
+                # 从switch的suggestions中提取case值
+                if condition.branch_type == 'switch' and condition.suggestions:
+                    for sug in condition.suggestions:
+                        # suggestions格式：'case值: MSG_LOGIN, MSG_LOGOUT, ...'
+                        if sug.startswith('case值:'):
+                            case_values_str = sug.replace('case值:', '').strip()
+                            # 提取每个case值
+                            case_values = [v.strip() for v in case_values_str.split(',')]
+                            for case_val in case_values:
+                                # 移除" ... 共X个case"后缀
+                                if '...' in case_val:
+                                    break
+                                # 移除"default"
+                                if case_val != 'default':
+                                    identifiers.add(case_val)
 
         if not identifiers:
             return {}
@@ -958,7 +1005,10 @@ class AnalysisResult:
         target_file_path = Path(self.target_file)
         possible_headers = []
 
-        # 收集头文件
+        # 1. 先搜索当前.cpp文件本身（枚举可能在文件内部）
+        possible_headers.append(target_file_path)
+
+        # 2. 收集头文件
         header_same_name = target_file_path.with_suffix('.h')
         if header_same_name.exists():
             possible_headers.append(header_same_name)

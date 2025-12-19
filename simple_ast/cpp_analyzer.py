@@ -869,25 +869,47 @@ class AnalysisResult:
         if header_same_name.exists():
             possible_headers.append(header_same_name)
 
-        # 2. 同目录下的其他.h文件（例如 imgui.h）
+        # 2. 同目录下的其他.h文件
         header_dir = target_file_path.parent
         if header_dir.exists():
             for h_file in header_dir.glob('*.h'):
                 if h_file not in possible_headers:
                     possible_headers.append(h_file)
 
-        # 3. 上层include目录
-        include_dirs = [
-            header_dir / 'include',
-            header_dir.parent / 'include',
-        ]
-        for inc_dir in include_dirs:
-            if inc_dir.exists():
-                for h_file in inc_dir.glob('*.h'):
-                    possible_headers.append(h_file)
+        # 3. 搜索常见的include目录（向上查找，与常量提取保持一致）
+        # source/xxx -> include/xxx 模式
+        # common/source/diam -> common/include/diam
+        current_dir = target_file_path.parent
+        for _ in range(3):  # 向上最多3层
+            # 检查 ../include 目录
+            include_dir = current_dir.parent / 'include'
+            if include_dir.exists():
+                # 保持相同的子目录结构
+                rel_path = current_dir.relative_to(current_dir.parent) if current_dir.parent else None
+                if rel_path:
+                    sub_include_dir = include_dir / rel_path.name
+                    if sub_include_dir.exists():
+                        for h_file in sub_include_dir.glob('*.h'):
+                            if h_file not in possible_headers:
+                                possible_headers.append(h_file)
 
-        # 在头文件中搜索定义（文本搜索）
-        for header_file in possible_headers[:10]:  # 限制搜索范围
+                # 也搜索include根目录
+                for h_file in include_dir.glob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+                # 递归搜索include下的所有子目录
+                for h_file in include_dir.rglob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+            current_dir = current_dir.parent
+            if current_dir == current_dir.parent:
+                break
+
+        # 在头文件中搜索定义（文本搜索，限制搜索范围避免太慢）
+        search_limit = min(len(possible_headers), 50)  # 最多搜索50个文件
+        for header_file in possible_headers[:search_limit]:
             try:
                 with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -986,8 +1008,40 @@ class AnalysisResult:
                 if h_file not in possible_headers:
                     possible_headers.append(h_file)
 
-        # 在头文件中搜索函数声明
-        for header_file in possible_headers[:10]:
+        # 3. 搜索常见的include目录（向上查找，与常量提取保持一致）
+        # source/xxx -> include/xxx 模式
+        # common/source/diam -> common/include/diam
+        current_dir = target_file_path.parent
+        for _ in range(3):  # 向上最多3层
+            # 检查 ../include 目录
+            include_dir = current_dir.parent / 'include'
+            if include_dir.exists():
+                # 保持相同的子目录结构
+                rel_path = current_dir.relative_to(current_dir.parent) if current_dir.parent else None
+                if rel_path:
+                    sub_include_dir = include_dir / rel_path.name
+                    if sub_include_dir.exists():
+                        for h_file in sub_include_dir.glob('*.h'):
+                            if h_file not in possible_headers:
+                                possible_headers.append(h_file)
+
+                # 也搜索include根目录
+                for h_file in include_dir.glob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+                # 递归搜索include下的所有子目录
+                for h_file in include_dir.rglob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+            current_dir = current_dir.parent
+            if current_dir == current_dir.parent:
+                break
+
+        # 在头文件中搜索函数声明（限制搜索范围避免太慢）
+        search_limit = min(len(possible_headers), 50)  # 最多搜索50个文件
+        for header_file in possible_headers[:search_limit]:
             try:
                 with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
@@ -1090,24 +1144,59 @@ class AnalysisResult:
         # 1. 先搜索当前.cpp文件本身（枚举可能在文件内部）
         possible_headers.append(target_file_path)
 
-        # 2. 收集头文件
+        # 2. 收集头文件 - 改进搜索策略
         header_same_name = target_file_path.with_suffix('.h')
         if header_same_name.exists():
             possible_headers.append(header_same_name)
 
+        # 3. 同目录下的所有头文件
         header_dir = target_file_path.parent
         if header_dir.exists():
             for h_file in header_dir.glob('*.h'):
                 if h_file not in possible_headers:
                     possible_headers.append(h_file)
 
-        print(f"[常量提取] 准备搜索 {len(possible_headers[:10])} 个文件", file=sys.stderr)
+        # 4. 搜索常见的include目录（向上查找）
+        # source/xxx -> include/xxx 模式
+        # common/source/diam -> common/include/diam
+        current_dir = target_file_path.parent
+        for _ in range(3):  # 向上最多3层
+            # 检查 ../include 目录
+            include_dir = current_dir.parent / 'include'
+            if include_dir.exists():
+                # 保持相同的子目录结构
+                rel_path = current_dir.relative_to(current_dir.parent) if current_dir.parent else None
+                if rel_path:
+                    sub_include_dir = include_dir / rel_path.name
+                    if sub_include_dir.exists():
+                        for h_file in sub_include_dir.glob('*.h'):
+                            if h_file not in possible_headers:
+                                possible_headers.append(h_file)
+
+                # 也搜索include根目录
+                for h_file in include_dir.glob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+                # 递归搜索include下的所有子目录
+                for h_file in include_dir.rglob('*.h'):
+                    if h_file not in possible_headers:
+                        possible_headers.append(h_file)
+
+            current_dir = current_dir.parent
+            if current_dir == current_dir.parent:
+                break
+
+        print(f"[常量提取] 准备搜索 {min(len(possible_headers), 50)} 个文件 (共找到 {len(possible_headers)} 个)", file=sys.stderr)
         for h in possible_headers[:10]:
             print(f"[常量提取]   - {h.name}", file=sys.stderr)
+        if len(possible_headers) > 10:
+            print(f"[常量提取]   ... 还有 {len(possible_headers) - 10} 个文件", file=sys.stderr)
 
-        # 搜索定义
+        # 搜索定义（限制搜索范围避免太慢）
+        search_limit = min(len(possible_headers), 50)  # 最多搜索50个文件
         for identifier in identifiers:
-            for header_file in possible_headers[:10]:
+            for header_file in possible_headers[:search_limit]:
                 try:
                     with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
                         for line in f:

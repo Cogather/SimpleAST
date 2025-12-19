@@ -649,8 +649,20 @@ class AnalysisResult:
                 lines.append(f"圈复杂度: {branch_analysis.cyclomatic_complexity}")
                 if branch_analysis.conditions:
                     lines.append("关键分支:")
-                    for idx, cond in enumerate(branch_analysis.conditions[:5], 1):  # 只显示前5个
+
+                    # 优先显示switch（包含case信息），然后显示if
+                    switch_conditions = [c for c in branch_analysis.conditions if c.branch_type == 'switch']
+                    other_conditions = [c for c in branch_analysis.conditions if c.branch_type != 'switch']
+
+                    # 显示所有条件（不截断）
+                    display_conditions = switch_conditions + other_conditions
+
+                    for idx, cond in enumerate(display_conditions, 1):
                         lines.append(f"  {idx}. {cond.condition}")
+                        # 对于switch，显示case值
+                        if cond.branch_type == 'switch' and cond.suggestions:
+                            for sug in cond.suggestions:
+                                lines.append(f"     {sug}")
 
         # === 3. 收集直接依赖 ===
         direct_internal_deps = []
@@ -706,6 +718,7 @@ class AnalysisResult:
 
     def _extract_data_structures_from_single_function(self, func_name: str):
         """从单个函数签名中提取使用的数据结构"""
+        import re
         used_ds = {}
 
         if func_name not in self.function_signatures:
@@ -713,18 +726,36 @@ class AnalysisResult:
 
         sig = self.function_signatures[func_name]
 
-        # 检查已知的数据结构
+        # 检查已知的数据结构（文件内部定义的）
         for ds_name in self.data_structures.keys():
             if ds_name in sig:
                 used_ds[ds_name] = self.data_structures[ds_name]
 
-        # 提取常见类型（ImVec2, ImU32等）
-        common_types = ['ImVec2', 'ImVec4', 'ImU32', 'ImU8', 'ImWchar', 'ImDrawIdx',
-                       'ImDrawCmd', 'ImDrawVert', 'ImDrawList', 'ImFont', 'ImFontAtlas']
+        # 通用类型提取：从签名中提取所有可能的类型名
+        # 1. 匹配参数类型：类型名 + 指针/引用/空格
+        # 例如：MsgBlock *pMsg, const ImVec2& pos, ImU32 col
+        type_pattern = r'\b([A-Z][a-zA-Z0-9_]*)\s*[\*&\s]'
+        type_matches = re.findall(type_pattern, sig)
 
-        for type_name in common_types:
-            if type_name in sig and type_name not in used_ds:
-                used_ds[type_name] = None  # 外部类型
+        # 2. 匹配类名（成员函数的类）
+        # 例如：void ImDrawList::AddConvexPolyFilled
+        class_pattern = r'\b([A-Z][a-zA-Z0-9_]*)::'
+        class_matches = re.findall(class_pattern, sig)
+
+        # 合并所有匹配
+        all_types = set(type_matches + class_matches)
+
+        # 去重并过滤掉明显不是类型的关键字
+        keywords = {'VOID', 'UINT32', 'INT', 'CHAR', 'BOOL', 'FLOAT', 'DOUBLE',
+                   'CONST', 'STATIC', 'INLINE', 'VIRTUAL', 'EXPLICIT', 'TYPEDEF'}
+
+        for type_name in all_types:
+            # 跳过C++关键字和已经添加的
+            if type_name.upper() in keywords or type_name in used_ds:
+                continue
+
+            # 添加为外部类型（后续会尝试查找定义）
+            used_ds[type_name] = None
 
         return used_ds
 

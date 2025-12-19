@@ -1345,11 +1345,26 @@ class CppProjectAnalyzer:
         # 分析函数分支结构
         print("Analyzing branch structures...")
         branch_analyses = {}
-        for func_name in self.single_file_analyzer.file_functions.keys():
-            func_info = self.single_file_analyzer.file_functions[func_name]
-            func_node = func_info['node']
-            branch_analysis = self.branch_analyzer.analyze_function(func_node, source_code)
-            branch_analyses[func_name] = branch_analysis
+
+        # 优化：如果指定了target_function，只分析相关函数
+        if target_function:
+            # 收集需要分析的函数：目标函数 + 其调用链中的所有内部函数
+            functions_to_analyze = set([target_function])
+            for ep in entry_points:
+                if ep.name in call_chains:
+                    self._collect_internal_functions_from_chain(call_chains[ep.name], functions_to_analyze)
+            print(f"  Target function mode: analyzing {len(functions_to_analyze)} functions (target + dependencies)")
+        else:
+            # 分析所有函数
+            functions_to_analyze = set(self.single_file_analyzer.file_functions.keys())
+            print(f"  Full file mode: analyzing {len(functions_to_analyze)} functions")
+
+        for func_name in functions_to_analyze:
+            if func_name in self.single_file_analyzer.file_functions:
+                func_info = self.single_file_analyzer.file_functions[func_name]
+                func_node = func_info['node']
+                branch_analysis = self.branch_analyzer.analyze_function(func_node, source_code)
+                branch_analyses[func_name] = branch_analysis
         print(f"  Analyzed {len(branch_analyses)} functions")
 
         # 创建结果
@@ -1379,6 +1394,19 @@ class CppProjectAnalyzer:
 
         for child in node.children:
             self._collect_signatures_from_tree(child, signatures)
+
+    def _collect_internal_functions_from_chain(self, node: CallNode, functions_set: Set[str]):
+        """从调用链收集所有内部函数名"""
+        if not node:
+            return
+
+        # 只收集内部函数（非外部调用）
+        if not node.is_external:
+            functions_set.add(node.function_name)
+
+        # 递归收集子节点
+        for child in node.children:
+            self._collect_internal_functions_from_chain(child, functions_set)
 
     def _analyze_file_full_mode(self, target_file: str, trace_depth: int, target_function: Optional[str]) -> AnalysisResult:
         """全局索引模式分析（原始模式）"""

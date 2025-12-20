@@ -148,9 +148,14 @@ class FunctionReporter:
         logger.info(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})")
 
         # === 1. 函数签名 ===
+        # 判断是否是内部函数（有序号前缀说明是内部依赖）
+        is_internal_dep = bool(number_prefix)
+
         if number_prefix:
-            lines.append(f"\n{number_prefix} {func_name}")
+            # 内部依赖函数：添加 [内部] 标记
+            lines.append(f"\n{number_prefix} {func_name} [内部]")
         else:
+            # 主函数
             lines.append(f"函数: {func_name}")
 
         if func_name in self.result.function_signatures:
@@ -228,15 +233,15 @@ class FunctionReporter:
 
             # 仅显示业务外部依赖（隐藏标准库和日志函数）
             if classified['business']:
-                lines.append("Mock:")
+                lines.append("Mock: (外部函数,需要Mock)")
                 for func in sorted(classified['business']):
                     # 尝试搜索函数签名
                     signature = self.signature_extractor.extract(func, self.result.target_file)
                     if signature:
-                        lines.append(f"  {func}: {signature}")
+                        lines.append(f"  {func} [外部]: {signature}")
                         logger.info(f"{indent}[Mock生成]   ✓ {func}: 找到签名")
                     else:
-                        lines.append(f"  {func}")
+                        lines.append(f"  {func} [外部]")
                         logger.info(f"{indent}[Mock生成]   ✗ {func}: 未找到签名")
             else:
                 logger.info(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）")
@@ -254,6 +259,10 @@ class FunctionReporter:
 
         # === 6. 递归显示内部依赖函数 ===
         if direct_internal_deps:
+            # 仅在主函数时添加章节标题
+            if not number_prefix:
+                lines.append("\n[内部依赖函数] (同文件定义,不需要Mock)")
+
             for idx, dep_func in enumerate(direct_internal_deps, start=1):
                 # 生成序号前缀
                 if number_prefix:

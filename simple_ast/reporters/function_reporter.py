@@ -8,11 +8,12 @@
 - 生成Mock清单
 - 提取数据结构
 - 提取常量定义
+- 提取全局变量
 - 格式化输出
 """
 import sys
 from typing import Dict, List, Set, Optional
-from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor
+from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor, GlobalVariableExtractor
 from ..searchers import HeaderSearcher
 from ..logger import get_logger
 logger = get_logger()
@@ -45,6 +46,9 @@ class FunctionReporter:
         # MacroExtractor 用于宏展开
         self.macro_extractor = MacroExtractor(project_root=project_root)
 
+        # GlobalVariableExtractor 用于全局变量提取
+        self.global_var_extractor = GlobalVariableExtractor()
+
     def generate(self, func_name: str) -> str:
         """
         生成单个函数的完整测试上下文报告
@@ -72,6 +76,21 @@ class FunctionReporter:
             self.result.branch_analyses,
             self.result.target_file
         )
+
+        # 提取全局变量
+        from pathlib import Path
+        target_file_path = Path(self.result.project_root) / self.result.target_file
+        global_vars = self.global_var_extractor.extract_from_function(
+            str(target_file_path),
+            func_name
+        )
+
+        # 过滤掉已经在常量定义中的项（避免重复）
+        if constants and global_vars:
+            for const_name in constants.keys():
+                if const_name in global_vars:
+                    del global_vars[const_name]
+                    logger.info(f"[全局变量] 过滤常量: {const_name}")
 
         if constants:
             lines.append("\n[常量定义]")
@@ -129,6 +148,21 @@ class FunctionReporter:
                         # 展开定义中的宏
                         definition = self._expand_macros_in_definition(definition)
                         lines.append(definition)
+
+        # 显示全局变量（如果有）
+        if global_vars:
+            lines.append("\n[全局变量]")
+            for var_name in sorted(global_vars.keys()):
+                info = global_vars[var_name]
+                operations = ', '.join(info['operations'])
+                locations = ', '.join([f"行{loc}" for loc in info['locations'][:5]])  # 最多显示5个位置
+
+                if len(info['locations']) > 5:
+                    locations += f" ... (共{len(info['locations'])}处)"
+
+                lines.append(f"  {var_name}:")
+                lines.append(f"    操作: {operations}")
+                lines.append(f"    位置: {locations}")
 
         return "\n".join(lines)
 

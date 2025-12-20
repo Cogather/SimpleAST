@@ -182,20 +182,15 @@ class FunctionReporter:
                     target_type = cast['target_type']
                     line_num = cast['line']
 
-                    lines.append(f"    → {target} ({target_type}*) [行{line_num}]")
-
-                    # 添加使用信息
+                    # 添加使用信息（访问的字段）
+                    usage_info = ""
                     if target in type_casts.get('usage', {}):
                         usage = type_casts['usage'][target]
                         if usage.get('fields'):
                             fields_str = ', '.join(usage['fields'])
-                            lines.append(f"       访问字段: {fields_str}")
-                        if usage.get('locations'):
-                            locs = usage['locations'][:3]  # 最多显示3个位置
-                            locs_str = ', '.join([f"行{loc}" for loc in locs])
-                            if len(usage['locations']) > 3:
-                                locs_str += f" ... (共{len(usage['locations'])}处)"
-                            lines.append(f"       使用位置: {locs_str}")
+                            usage_info = f" → 访问字段: {fields_str}"
+
+                    lines.append(f"    → {target} ({target_type}*) [行{line_num}]{usage_info}")
 
         # 显示全局变量（如果有）
         if global_vars:

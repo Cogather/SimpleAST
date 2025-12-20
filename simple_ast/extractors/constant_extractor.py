@@ -43,7 +43,7 @@ class ConstantExtractor:
         logger.info(f"\n[常量提取] 开始分析函数: {func_name}")
 
         # 收集标识符
-        identifiers = self._collect_identifiers(func_name, function_signatures, branch_analyses)
+        identifiers = self._collect_identifiers(func_name, function_signatures, branch_analyses, target_file)
 
         if not identifiers:
             logger.info(f"[常量提取] 没有提取到任何标识符")
@@ -64,15 +64,15 @@ class ConstantExtractor:
         return constants
 
     def _collect_identifiers(self, func_name: str, function_signatures: Dict[str, str],
-                            branch_analyses: Dict) -> Set[str]:
-        """收集标识符（从签名、分支条件、case值）"""
+                            branch_analyses: Dict, target_file: str) -> Set[str]:
+        """收集标识符（从签名、分支条件、case值、函数体）"""
         identifiers = set()
 
         # 1. 从函数签名提取
         sig = function_signatures[func_name]
         upper_identifiers = re.findall(r'\b[A-Z][A-Z0-9_]+\b', sig)
         identifiers.update(upper_identifiers)
-        logger.info(f"[常量提取] 从签名提取到 {len(upper_identifiers)} 个大写标识符: {upper_identifiers[:10]}")
+        logger.info(f"[常量提取] 从签名提取到 {len(upper_identifiers)} 个大写标识符")
 
         # 2. 从分支条件提取
         if branch_analyses and func_name in branch_analyses:
@@ -83,7 +83,6 @@ class ConstantExtractor:
                 # 从条件本身提取
                 upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', condition.condition)
                 identifiers.update(upper_ids)
-                logger.info(f"[常量提取]   条件{idx+1} [{condition.branch_type}]: 提取 {len(upper_ids)} 个标识符")
 
                 # 从 switch 的 suggestions 中提取 case 值
                 if condition.branch_type == 'switch' and condition.suggestions:
@@ -91,12 +90,72 @@ class ConstantExtractor:
                         if sug.startswith('case值:'):
                             case_values_str = sug.replace('case值:', '').strip()
                             case_values = [v.strip() for v in case_values_str.split(',')]
-                            logger.info(f"[常量提取]   switch找到 {len(case_values)} 个case值: {case_values}")
                             for case_val in case_values:
                                 if '...' in case_val:
                                     break
                                 if case_val != 'default':
                                     identifiers.add(case_val)
+
+        # 3. 从函数体中提取（新增）
+        body_identifiers = self._extract_from_function_body(target_file, func_name)
+        if body_identifiers:
+            identifiers.update(body_identifiers)
+            logger.info(f"[常量提取] 从函数体提取到 {len(body_identifiers)} 个标识符")
+
+        return identifiers
+
+    def _extract_from_function_body(self, target_file: str, func_name: str) -> Set[str]:
+        """
+        从函数体中提取大写标识符（宏和常量）
+
+        Returns:
+            Set[str]: 大写标识符集合
+        """
+        identifiers = set()
+
+        try:
+            # 读取源文件
+            from pathlib import Path
+            if self.project_root:
+                file_path = Path(self.project_root) / target_file
+            else:
+                file_path = Path(target_file)
+
+            if not file_path.exists():
+                return identifiers
+
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            # 使用tree-sitter解析
+            from ..cpp_parser import CppParser
+            parser = CppParser()
+            tree = parser.parse_file(str(file_path))
+
+            if not tree:
+                return identifiers
+
+            # 查找目标函数
+            func_defs = CppParser.find_nodes_by_type(tree.root_node, 'function_definition')
+            target_func = None
+
+            for func_def in func_defs:
+                name = CppParser.get_function_name(func_def, content.encode())
+                if name == func_name:
+                    target_func = func_def
+                    break
+
+            if not target_func:
+                return identifiers
+
+            # 从函数体中提取所有标识符
+            func_text = CppParser.get_node_text(target_func, content.encode())
+            # 只提取全大写的标识符（可能是宏或常量）
+            upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', func_text)
+            identifiers.update(upper_ids)
+
+        except Exception as e:
+            logger.error(f"[常量提取] 从函数体提取失败: {e}")
 
         return identifiers
 
@@ -128,8 +187,16 @@ class ConstantExtractor:
 
             if results:
                 file_path, line_num, line_content = results[0]
-                constants[identifier] = line_content.strip()
-                logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 #define {identifier}")
+
+                # 检查是否是多行宏（以 \ 结尾）
+                if line_content.rstrip().endswith('\\'):
+                    # 读取完整的多行宏定义
+                    full_definition = self._read_multiline_macro(file_path, line_num)
+                    constants[identifier] = full_definition
+                    logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到多行宏 #define {identifier}")
+                else:
+                    constants[identifier] = line_content.strip()
+                    logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 #define {identifier}")
                 continue
 
             # 搜索 enum 成员
@@ -146,6 +213,50 @@ class ConstantExtractor:
                 logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 enum {identifier}")
 
         return constants
+
+    def _read_multiline_macro(self, file_path: Path, start_line: int) -> str:
+        """
+        读取多行宏定义
+
+        Args:
+            file_path: 文件路径
+            start_line: 起始行号（从1开始）
+
+        Returns:
+            完整的多行宏定义
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+
+            if start_line < 1 or start_line > len(lines):
+                return ""
+
+            # 读取从start_line开始的所有行，直到不以 \ 结尾
+            macro_lines = []
+            current_line = start_line - 1  # 转换为0-based索引
+
+            while current_line < len(lines):
+                line = lines[current_line].rstrip()
+                macro_lines.append(line)
+
+                # 如果不以 \ 结尾，说明宏定义结束
+                if not line.endswith('\\'):
+                    break
+
+                current_line += 1
+
+                # 安全限制：最多读取20行
+                if len(macro_lines) >= 20:
+                    break
+
+            # 合并所有行
+            full_macro = '\n'.join(macro_lines)
+            return full_macro
+
+        except Exception as e:
+            logger.error(f"[常量提取] 读取多行宏失败: {file_path}:{start_line}, {e}")
+            return ""
 
     def _search_with_header_searcher(self, identifiers: Set[str], target_file: str) -> Dict[str, str]:
         """使用 HeaderSearcher 在局部文件中搜索（降级方案）"""

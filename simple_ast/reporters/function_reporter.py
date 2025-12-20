@@ -9,11 +9,12 @@
 - 提取数据结构
 - 提取常量定义
 - 提取全局变量
+- 提取类型转换关系
 - 格式化输出
 """
 import sys
 from typing import Dict, List, Set, Optional
-from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor, GlobalVariableExtractor
+from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor, GlobalVariableExtractor, TypeCastExtractor
 from ..searchers import HeaderSearcher
 from ..logger import get_logger
 logger = get_logger()
@@ -49,6 +50,9 @@ class FunctionReporter:
         # GlobalVariableExtractor 用于全局变量提取
         self.global_var_extractor = GlobalVariableExtractor()
 
+        # TypeCastExtractor 用于类型转换提取
+        self.type_cast_extractor = TypeCastExtractor()
+
     def generate(self, func_name: str) -> str:
         """
         生成单个函数的完整测试上下文报告
@@ -81,6 +85,12 @@ class FunctionReporter:
         from pathlib import Path
         target_file_path = Path(self.result.project_root) / self.result.target_file
         global_vars = self.global_var_extractor.extract_from_function(
+            str(target_file_path),
+            func_name
+        )
+
+        # 提取类型转换关系
+        type_casts = self.type_cast_extractor.extract_from_function(
             str(target_file_path),
             func_name
         )
@@ -148,6 +158,40 @@ class FunctionReporter:
                         # 展开定义中的宏
                         definition = self._expand_macros_in_definition(definition)
                         lines.append(definition)
+
+        # 显示类型转换关系（如果有）
+        if type_casts and type_casts.get('casts'):
+            lines.append("\n[类型转换关系]")
+
+            # 按源变量分组
+            source_groups = {}
+            for cast in type_casts['casts']:
+                source = cast['source_var'] or '未知'
+                if source not in source_groups:
+                    source_groups[source] = []
+                source_groups[source].append(cast)
+
+            for source_var, casts in sorted(source_groups.items()):
+                lines.append(f"  {source_var} 的转换:")
+                for cast in casts:
+                    target = cast['target_var']
+                    target_type = cast['target_type']
+                    line_num = cast['line']
+
+                    lines.append(f"    → {target} ({target_type}*) [行{line_num}]")
+
+                    # 添加使用信息
+                    if target in type_casts.get('usage', {}):
+                        usage = type_casts['usage'][target]
+                        if usage.get('fields'):
+                            fields_str = ', '.join(usage['fields'])
+                            lines.append(f"       访问字段: {fields_str}")
+                        if usage.get('locations'):
+                            locs = usage['locations'][:3]  # 最多显示3个位置
+                            locs_str = ', '.join([f"行{loc}" for loc in locs])
+                            if len(usage['locations']) > 3:
+                                locs_str += f" ... (共{len(usage['locations'])}处)"
+                            lines.append(f"       使用位置: {locs_str}")
 
         # 显示全局变量（如果有）
         if global_vars:

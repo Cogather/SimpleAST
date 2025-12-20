@@ -281,13 +281,13 @@ class FunctionReporter:
         # 合并所有匹配
         all_types = set(type_matches + class_matches)
 
-        # 3. 如果有边界分析结果，添加边界中检测到的外部数据结构
+        # 3. 从函数体中提取实际使用的类型
         boundary_types_count = 0
-        if self.result.file_boundary and hasattr(self.result.file_boundary, 'external_data_structures'):
-            boundary_types = self.result.file_boundary.external_data_structures
-            all_types.update(boundary_types)
-            boundary_types_count = len(boundary_types)
-            logger.info(f"[数据结构提取] 边界分析: 找到 {boundary_types_count} 个外部类型")
+        function_body_types = self._extract_types_from_function_body(func_name)
+        if function_body_types:
+            all_types.update(function_body_types)
+            boundary_types_count = len(function_body_types)
+            logger.info(f"[数据结构提取] 函数体分析: 找到 {boundary_types_count} 个类型")
 
         logger.info(f"[数据结构提取] 正则提取: {len(type_matches)} 个参数类型, {len(class_matches)} 个类名, 边界分析 {boundary_types_count} 个")
         if all_types:
@@ -301,20 +301,52 @@ class FunctionReporter:
                          'INT8', 'INT16', 'INT32', 'INT64',
                          'DWORD', 'WORD', 'BYTE', 'SIZE_T'}
 
+        # 常见的参数名模式（这些不应该被识别为类型）
+        param_name_patterns = [
+            r'^p[A-Z]',         # pMsg, pBuf, pValue - 指针参数命名习惯
+            r'^ps[A-Z]',        # psLocalAddr, psRemoteAddr - 指针到结构体
+            r'^puc[A-Z]',       # pucData, pucStr - 指针到unsigned char
+            r'^pul[A-Z]',       # pulDataLength, pulHandleTm - 指针到unsigned long
+            r'^ph[A-Z]',        # phTimerGrp - 句柄指针
+            r'^(IN|OUT|INOUT|IO)$',  # 参数方向修饰符
+            r'^PT[A-Z]',        # PTDiamOsAllocMsg - 函数指针类型前缀
+        ]
+
+        # 常见的宏/修饰符
+        common_macros = {'IN', 'OUT', 'INOUT', 'IO', 'OPTIONAL', 'CONST'}
+
         external_count = 0
         external_filtered = 0
         for type_name in all_types:
-            # 跳过关键字和基础typedef
+            # 1. 跳过关键字和基础typedef
             if type_name.upper() in keywords or type_name.upper() in basic_typedefs:
                 logger.info(f"[数据结构提取] ✗ 过滤关键字/基础typedef: {type_name}")
                 external_filtered += 1
                 continue
 
-            # 跳过已添加的
+            # 2. 跳过常见宏
+            if type_name in common_macros:
+                logger.info(f"[数据结构提取] ✗ 过滤宏定义: {type_name}")
+                external_filtered += 1
+                continue
+
+            # 3. 跳过参数名模式
+            is_param_name = False
+            for pattern in param_name_patterns:
+                if re.match(pattern, type_name):
+                    logger.info(f"[数据结构提取] ✗ 过滤参数名: {type_name} (匹配 {pattern})")
+                    external_filtered += 1
+                    is_param_name = True
+                    break
+
+            if is_param_name:
+                continue
+
+            # 4. 跳过已添加的
             if type_name in used_ds:
                 continue
 
-            # 跳过基础类型模式
+            # 5. 跳过基础类型模式
             is_basic_type = False
             for pattern in basic_type_patterns:
                 if re.match(pattern, type_name):
@@ -333,3 +365,76 @@ class FunctionReporter:
         logger.info(f"[数据结构提取] 总计: {len(used_ds)} 个数据结构 (内部 {internal_count} + 外部 {external_count})")
 
         return used_ds
+
+    def _extract_types_from_function_body(self, func_name: str) -> set:
+        """
+        从函数体的 AST 节点中提取实际使用的类型
+
+        提取策略：
+        1. 从函数体中查找所有 type_identifier 节点（变量声明、类型转换等）
+        2. 从直接调用的函数签名中提取类型
+
+        Args:
+            func_name: 函数名
+
+        Returns:
+            set: 函数体中使用的类型名称集合
+        """
+        types = set()
+
+        # 检查是否有 file_boundary 和函数节点信息
+        if not self.result.file_boundary:
+            logger.debug(f"[函数体类型提取] 无 file_boundary 信息")
+            return types
+
+        file_boundary = self.result.file_boundary
+
+        # 检查是否有函数信息
+        if not hasattr(file_boundary, 'file_functions') or not file_boundary.file_functions:
+            logger.debug(f"[函数体类型提取] file_boundary 无 file_functions")
+            return types
+
+        # 检查函数是否在文件中
+        if func_name not in file_boundary.file_functions:
+            logger.debug(f"[函数体类型提取] 函数 {func_name} 不在 file_functions 中")
+            return types
+
+        # 获取函数节点和源代码
+        func_info = file_boundary.file_functions[func_name]
+        func_node = func_info.get('node')
+        source_code = file_boundary.source_code
+
+        if not func_node or not source_code:
+            logger.debug(f"[函数体类型提取] 缺少函数节点或源代码")
+            return types
+
+        # 从函数体中提取类型
+        from ..cpp_parser import CppParser
+
+        # 1. 查找函数体节点
+        body_node = func_node.child_by_field_name('body')
+        if not body_node:
+            logger.debug(f"[函数体类型提取] 函数 {func_name} 无函数体")
+            return types
+
+        # 2. 从函数体中查找所有 type_identifier
+        type_nodes = CppParser.find_nodes_by_type(body_node, 'type_identifier')
+        for type_node in type_nodes:
+            type_name = CppParser.get_node_text(type_node, source_code)
+            if type_name:
+                types.add(type_name)
+
+        # 3. 查找结构体/类类型的限定名（如 struct Foo）
+        struct_specifiers = CppParser.find_nodes_by_type(body_node, 'struct_specifier')
+        for spec_node in struct_specifiers:
+            # 获取结构体名称
+            name_node = spec_node.child_by_field_name('name')
+            if name_node:
+                struct_name = CppParser.get_node_text(name_node, source_code)
+                if struct_name:
+                    types.add(struct_name)
+
+        logger.debug(f"[函数体类型提取] 从函数体提取到 {len(types)} 个类型: {sorted(types)}")
+
+        return types
+

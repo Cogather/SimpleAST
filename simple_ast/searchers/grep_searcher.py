@@ -8,7 +8,7 @@ import re
 import tempfile
 import os
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 import sys
 from .search_config import get_search_config
 from ..logger import get_logger
@@ -111,6 +111,117 @@ class GrepSearcher:
             max_results=max_results,
             show_line_numbers=show_line_numbers
         )
+
+    def search_content_batch(
+        self,
+        patterns: List[str],
+        file_glob: str = '*.h',
+        max_results_per_pattern: int = 10
+    ) -> Dict[str, List[Tuple[Path, int, str]]]:
+        """
+        批量搜索多个模式（性能优化版本）
+
+        Args:
+            patterns: 正则表达式模式列表
+            file_glob: 文件匹配模式
+            max_results_per_pattern: 每个模式最多返回结果数
+
+        Returns:
+            字典：{pattern: [(文件路径, 行号, 匹配的行内容), ...], ...}
+        """
+        if not patterns:
+            return {}
+
+        try:
+            # 根据操作系统选择脚本类型
+            is_windows = sys.platform == 'win32'
+            suffix = '.bat' if is_windows else '.sh'
+
+            # 创建临时脚本文件
+            with tempfile.NamedTemporaryFile(
+                mode='w',
+                suffix=suffix,
+                delete=False,
+                encoding='utf-8'
+            ) as script_file:
+                script_path = script_file.name
+
+                # 构建批量搜索命令
+                if self.config.command == 'rg':
+                    # ripgrep 支持多个 -e 参数
+                    pattern_args = ' '.join([f'-e "{p}"' for p in patterns])
+                    cmd = f'rg -n --glob="{file_glob}" {pattern_args} "{self.project_root}"'
+                elif self.config.command == 'grep':
+                    # grep 使用 -e 参数
+                    pattern_args = ' '.join([f'-e "{p}"' for p in patterns])
+                    cmd = f'grep -r -E -n --include="{file_glob}" {pattern_args} "{self.project_root}"'
+                else:
+                    return {}
+
+                # 写入脚本
+                if is_windows:
+                    script_file.write('@echo off\n')
+                    script_file.write('chcp 65001 >nul\n')
+                    script_file.write(cmd + '\n')
+                else:
+                    script_file.write('#!/bin/bash\n')
+                    script_file.write(cmd + '\n')
+
+            # 执行脚本
+            if is_windows:
+                result = subprocess.run(
+                    [script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,  # 批量搜索可能需要更长时间
+                    encoding='utf-8',
+                    errors='ignore',
+                    shell=True
+                )
+            else:
+                result = subprocess.run(
+                    ['bash', script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+
+            # 删除临时脚本
+            try:
+                os.unlink(script_path)
+            except:
+                pass
+
+            if result.returncode != 0 and result.returncode != 1:
+                logger.error(f"批量搜索错误: {result.stderr}")
+                return {}
+
+            # 解析输出并按模式分组
+            results_by_pattern = {p: [] for p in patterns}
+
+            for line in result.stdout.splitlines():
+                parsed = self._parse_grep_line(line)
+                if not parsed:
+                    continue
+
+                file_path, line_num, content = parsed
+
+                # 判断这行匹配哪个模式
+                for pattern in patterns:
+                    try:
+                        if re.search(pattern, content):
+                            if len(results_by_pattern[pattern]) < max_results_per_pattern:
+                                results_by_pattern[pattern].append((file_path, line_num, content))
+                    except re.error:
+                        continue
+
+            return results_by_pattern
+
+        except Exception as e:
+            logger.error(f"批量搜索异常: {e}")
+            return {}
 
     def _search_via_script(
         self,

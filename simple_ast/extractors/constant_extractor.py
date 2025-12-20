@@ -219,41 +219,71 @@ class ConstantExtractor:
         return self._search_with_header_searcher(identifiers, target_file)
 
     def _search_with_grep(self, identifiers: Set[str]) -> Dict[str, str]:
-        """使用 GrepSearcher 全局搜索常量定义"""
+        """使用 GrepSearcher 全局搜索常量定义（批量优化版本）"""
         constants = {}
 
+        # 构建所有搜索模式
+        define_patterns = []
+        enum_patterns = []
+        identifier_to_define_pattern = {}
+        identifier_to_enum_pattern = {}
+
         for identifier in identifiers:
-            # 搜索 #define
+            # #define 模式
             define_pattern = rf'^\s*#define\s+{re.escape(identifier)}\b'
-            results = self.grep_searcher.search_content(
-                pattern=define_pattern,
-                file_glob='*.h',
-                max_results=1
-            )
+            define_patterns.append(define_pattern)
+            identifier_to_define_pattern[define_pattern] = identifier
 
-            if results:
-                file_path, line_num, line_content = results[0]
+            # enum 成员模式
+            enum_pattern = rf'^\s*{re.escape(identifier)}\s*='
+            enum_patterns.append(enum_pattern)
+            identifier_to_enum_pattern[enum_pattern] = identifier
 
-                # 检查是否是多行宏（以 \ 结尾）
-                if line_content.rstrip().endswith('\\'):
-                    # 读取完整的多行宏定义
-                    full_definition = self._read_multiline_macro(file_path, line_num)
-                    constants[identifier] = full_definition
-                    logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到多行宏 #define {identifier}")
-                else:
-                    constants[identifier] = line_content.strip()
-                    logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 #define {identifier}")
+        # 批量搜索 #define
+        logger.info(f"[常量提取] 批量搜索 {len(define_patterns)} 个 #define 模式")
+        define_results = self.grep_searcher.search_content_batch(
+            patterns=define_patterns,
+            file_glob='*.h',
+            max_results_per_pattern=1
+        )
+
+        # 处理 #define 结果
+        for pattern, results in define_results.items():
+            if not results:
                 continue
 
-            # 搜索 enum 成员
-            enum_pattern = rf'^\s*{re.escape(identifier)}\s*='
-            results = self.grep_searcher.search_content(
-                pattern=enum_pattern,
+            identifier = identifier_to_define_pattern[pattern]
+            file_path, line_num, line_content = results[0]
+
+            # 检查是否是多行宏（以 \ 结尾）
+            if line_content.rstrip().endswith('\\'):
+                # 读取完整的多行宏定义
+                full_definition = self._read_multiline_macro(file_path, line_num)
+                constants[identifier] = full_definition
+                logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到多行宏 #define {identifier}")
+            else:
+                constants[identifier] = line_content.strip()
+                logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 #define {identifier}")
+
+        # 对于没找到 #define 的标识符，批量搜索 enum
+        not_found = [id for id in identifiers if id not in constants]
+        if not_found:
+            # 收集没找到的标识符对应的 enum 模式
+            enum_patterns_to_search = [p for p, id in identifier_to_enum_pattern.items() if id in not_found]
+
+            logger.info(f"[常量提取] 批量搜索 {len(enum_patterns_to_search)} 个 enum 模式")
+            enum_results = self.grep_searcher.search_content_batch(
+                patterns=enum_patterns_to_search,
                 file_glob='*.h',
-                max_results=1
+                max_results_per_pattern=1
             )
 
-            if results:
+            # 处理 enum 结果
+            for pattern, results in enum_results.items():
+                if not results:
+                    continue
+
+                identifier = identifier_to_enum_pattern[pattern]
                 file_path, line_num, line_content = results[0]
                 constants[identifier] = line_content.strip()
                 logger.info(f"[常量提取] ✓ 在 {file_path.name}:{line_num} 找到 enum {identifier}")

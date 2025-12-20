@@ -70,7 +70,9 @@ class StructureExtractor:
                     with open(header_file, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read()
 
-                    definition = self._search_struct_by_text(content, struct_name, header_file.name)
+                    # 使用绝对路径
+                    abs_path = str(header_file.resolve()) if hasattr(header_file, 'resolve') else str(header_file)
+                    definition = self._search_struct_by_text(content, struct_name, abs_path)
                     if definition:
                         return definition
 

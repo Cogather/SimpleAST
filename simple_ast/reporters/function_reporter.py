@@ -153,10 +153,20 @@ class FunctionReporter:
 
                     for idx, cond in enumerate(display_conditions, 1):
                         lines.append(f"  {idx}. {cond.condition}")
-                        # 对于switch，显示case值
+                        # 对于switch，显示case值和详细信息
                         if cond.branch_type == 'switch' and cond.suggestions:
                             for sug in cond.suggestions:
                                 lines.append(f"     {sug}")
+
+                            # 显示每个 case 的详细信息
+                            if hasattr(cond, 'switch_cases') and cond.switch_cases:
+                                lines.append("     详细分支:")
+                                for case_info in cond.switch_cases:
+                                    lines.append(f"       case {case_info.case_value}:")
+                                    if case_info.called_functions:
+                                        func_list = ', '.join(case_info.called_functions)
+                                        lines.append(f"         调用: {func_list}")
+                                    lines.append(f"         位置: 行{case_info.line_start}-{case_info.line_end}")
 
         # === 3. 收集直接依赖 ===
         direct_internal_deps = []

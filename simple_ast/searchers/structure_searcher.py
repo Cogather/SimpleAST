@@ -194,7 +194,7 @@ class StructureSearcher:
                     definition_lines.append(lines[i].rstrip())
 
                 definition = '\n'.join(definition_lines)
-                return f"// 来自: {file_path.name}:{start_idx + 1}\n{definition}"
+                return f"// 来自: {file_path.resolve()}:{start_idx + 1}\n{definition}"
 
             # 情况2: 匹配行包含 typedef struct 或 struct Name {
             else:
@@ -226,7 +226,7 @@ class StructureSearcher:
                         break
 
                 definition = '\n'.join(definition_lines)
-                return f"// 来自: {file_path.name}:{start_idx + 1}\n{definition}"
+                return f"// 来自: {file_path.resolve()}:{start_idx + 1}\n{definition}"
 
         except Exception as e:
             return None

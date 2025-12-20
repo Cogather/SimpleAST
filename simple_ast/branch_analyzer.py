@@ -3,11 +3,21 @@
 分析函数的分支复杂度和关键条件
 """
 from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from .cpp_parser import CppParser
 from .logger import get_logger
 
 logger = get_logger()
+
+
+@dataclass
+class SwitchCaseInfo:
+    """Switch case 分支信息"""
+    case_value: str  # case 的值，如 "PID_DIAM"
+    case_body: str  # case 分支的代码片段
+    called_functions: List[str] = field(default_factory=list)  # 该 case 中调用的函数
+    line_start: int = 0
+    line_end: int = 0
 
 
 @dataclass
@@ -17,6 +27,7 @@ class BranchCondition:
     condition: str
     branch_type: str  # if, switch, for, while
     suggestions: List[str]  # 测试建议
+    switch_cases: List[SwitchCaseInfo] = field(default_factory=list)  # switch 的各个 case
 
 
 @dataclass
@@ -227,7 +238,7 @@ class BranchAnalyzer:
         )
 
     def _analyze_switch_condition(self, switch_node, source_code: bytes) -> Optional[BranchCondition]:
-        """分析switch语句的条件"""
+        """分析switch语句的条件和每个case的内容"""
         import sys
 
         # 找到switch的条件和所有case
@@ -245,13 +256,16 @@ class BranchAnalyzer:
 
         logger.info(f"[分支分析]   分析switch: 行{line}, 条件={condition_text}")
 
-        # 提取所有case标签值
+        # 提取所有case标签和对应的处理内容
         case_nodes = self._find_all_nodes(switch_node, 'case_statement')
         case_values = []
+        switch_cases_info = []  # 保存详细的 case 信息
+
         logger.info(f"[分支分析]     找到 {len(case_nodes)} 个case节点")
 
-        for idx, case_node in enumerate(case_nodes):  # 显示所有case值
-            # case语句的第一个子节点通常是值表达式
+        for idx, case_node in enumerate(case_nodes):
+            # 提取 case 值
+            case_value = None
             for child in case_node.children:
                 if child.type not in ['case', ':']:
                     case_value = CppParser.get_node_text(child, source_code).strip()
@@ -261,10 +275,24 @@ class BranchAnalyzer:
                             logger.info(f"[分支分析]       case {idx+1}: {case_value}")
                     break
 
+            # 提取 case 的处理内容
+            if case_value:
+                case_info = self._extract_case_body(case_node, case_value, source_code)
+                if case_info:
+                    switch_cases_info.append(case_info)
+
         if len(case_values) > 5:
             logger.info(f"[分支分析]       ... 还有 {len(case_values)-5} 个case")
 
+        # 检查 default 分支
         has_default = self._count_nodes(switch_node, ['default_statement']) > 0
+        if has_default:
+            default_nodes = self._find_all_nodes(switch_node, 'default_statement')
+            if default_nodes:
+                default_info = self._extract_case_body(default_nodes[0], 'default', source_code)
+                if default_info:
+                    switch_cases_info.append(default_info)
+
         logger.info(f"[分支分析]     有default分支: {has_default}")
 
         suggestions = []
@@ -286,8 +314,111 @@ class BranchAnalyzer:
             line=line,
             condition=condition_text,
             branch_type='switch',
-            suggestions=suggestions
+            suggestions=suggestions,
+            switch_cases=switch_cases_info
         )
+
+    def _extract_case_body(self, case_node, case_value: str, source_code: bytes) -> Optional[SwitchCaseInfo]:
+        """提取 case 分支的处理内容
+
+        关键发现：在 tree-sitter 的 C/C++ AST 中，case_statement 节点已经包含了
+        该 case 的所有语句（直到 break 或下一个 case），而不是将语句作为兄弟节点。
+
+        case_statement 的子节点结构：
+        - 'case' 关键字
+        - 值表达式（如 PID_DIAM）
+        - ':' 冒号
+        - 后续的所有语句（expression_statement, if_statement, break_statement 等）
+        """
+        import sys
+
+        # 获取 case 的起止行
+        line_start = case_node.start_point[0] + 1
+        line_end = case_node.end_point[0] + 1
+
+        logger.info(f"[Case提取] 开始提取 case {case_value} (行{line_start}-{line_end})")
+        logger.info(f"[Case提取]   case_node 子节点数: {len(case_node.children)}")
+
+        # 提取 case 主体的代码和函数调用
+        case_body_lines = []
+        called_functions = []
+
+        # 遍历 case_statement 的所有子节点
+        # 跳过 'case' 关键字、值表达式和 ':'，只处理实际的语句
+        stmt_count = 0
+        for i, child in enumerate(case_node.children):
+            logger.info(f"[Case提取]     子节点[{i}]: type={child.type}")
+
+            # 跳过 case 关键字、值、冒号
+            if child.type in ['case', ':', 'default'] or child.is_named == False:
+                continue
+
+            # 跳过值表达式（通常是第一个 named 子节点）
+            # 通过检查是否在同一行判断
+            if child.start_point[0] == case_node.start_point[0]:
+                # 这是 case 值表达式，跳过
+                continue
+
+            # 提取语句内容
+            stmt_text = CppParser.get_node_text(child, source_code).strip()
+            if stmt_text and child.type != 'comment':
+                # 限制每个语句的长度
+                display_text = stmt_text[:80] + '...' if len(stmt_text) > 80 else stmt_text
+                case_body_lines.append(display_text)
+                stmt_count += 1
+                logger.info(f"[Case提取]       提取语句: {display_text}")
+
+            # 提取函数调用（从所有子节点，包括注释之外的）
+            if child.type != 'comment':
+                func_calls = self._extract_function_calls(child, source_code)
+                if func_calls:
+                    logger.info(f"[Case提取]       找到函数调用: {func_calls}")
+                    called_functions.extend(func_calls)
+
+        # 合并 case 主体代码
+        case_body = '\n'.join(case_body_lines) if case_body_lines else ''
+
+        # 去重函数调用
+        called_functions = list(dict.fromkeys(called_functions))
+
+        logger.info(f"[Case提取] 完成 case {case_value}: 语句数={stmt_count}, 函数调用数={len(called_functions)}")
+        if called_functions:
+            logger.info(f"[Case提取]   调用列表: {called_functions}")
+
+        return SwitchCaseInfo(
+            case_value=case_value,
+            case_body=case_body[:200] + '...' if len(case_body) > 200 else case_body,  # 限制长度
+            called_functions=called_functions,
+            line_start=line_start,
+            line_end=line_end
+        )
+
+    def _extract_function_calls(self, node, source_code: bytes) -> List[str]:
+        """从节点中提取函数调用"""
+        function_calls = []
+
+        # 查找所有 call_expression 节点
+        call_nodes = self._find_all_nodes(node, 'call_expression')
+
+        logger.debug(f"[函数调用提取] 节点类型={node.type}, 找到{len(call_nodes)}个call_expression")
+
+        for call_node in call_nodes:
+            # 获取函数名（第一个子节点通常是函数名或限定符）
+            if call_node.children:
+                func_name_node = call_node.children[0]
+                func_name = CppParser.get_node_text(func_name_node, source_code).strip()
+
+                logger.debug(f"[函数调用提取]   候选函数名: {func_name}")
+
+                # 过滤掉一些常见的宏和操作符
+                if func_name and not func_name.startswith('('):
+                    function_calls.append(func_name)
+                    logger.debug(f"[函数调用提取]     ✓ 添加: {func_name}")
+                else:
+                    logger.debug(f"[函数调用提取]     ✗ 过滤: {func_name}")
+
+        return function_calls
+
 
     def _analyze_loop_condition(self, loop_node, source_code: bytes) -> Optional[BranchCondition]:
         """分析循环条件"""

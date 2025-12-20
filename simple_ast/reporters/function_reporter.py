@@ -228,10 +228,11 @@ class FunctionReporter:
             classified = self.result.external_classifier.classify(direct_external_deps)
 
             print(f"{indent}[Mock生成] 外部函数分类: 业务{len(classified.get('business', []))}个, "
-                  f"标准库{len(classified.get('standard_lib', []))}个, "
-                  f"日志{len(classified.get('logging', []))}个", file=sys.stderr)
+                  f"宏{len(classified.get('macros', []))}个, "
+                  f"标准库{len(classified.get('standard_library', []))}个, "
+                  f"日志{len(classified.get('logging_utility', []))}个", file=sys.stderr)
 
-            # 仅显示业务外部依赖（隐藏标准库和日志函数）
+            # 仅显示业务外部依赖（隐藏标准库、日志函数和宏定义）
             if classified['business']:
                 lines.append("Mock: (外部函数,需要Mock)")
                 for func in sorted(classified['business']):
@@ -244,7 +245,7 @@ class FunctionReporter:
                         lines.append(f"  {func} [外部]")
                         logger.info(f"{indent}[Mock生成]   ✗ {func}: 未找到签名")
             else:
-                logger.info(f"{indent}[Mock生成] 无业务外部依赖（已过滤标准库和日志）")
+                logger.info(f"{indent}[Mock生成] 无业务外部依赖（已过滤宏、标准库和日志）")
         else:
             logger.info(f"{indent}[Mock生成] 无外部依赖")
 

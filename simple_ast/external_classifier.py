@@ -20,6 +20,7 @@ class ExternalFunctionClassifier:
         self.config = self._load_config(config_path)
         self.standard_lib_patterns = self.config.get('standard_library', {}).get('patterns', [])
         self.logging_patterns = self.config.get('logging_utility', {}).get('patterns', [])
+        self.macro_patterns = self.config.get('macro_definitions', {}).get('patterns', [])
         self.custom_exclusions = self.config.get('custom_exclusions', {}).get('patterns', [])
 
     def _load_config(self, config_path: str = None) -> Dict:
@@ -56,6 +57,13 @@ class ExternalFunctionClassifier:
                     '*ASSERT*', '*CHECK*', '*TRACE*'
                 ]
             },
+            'macro_definitions': {
+                'patterns': [
+                    # 全大写的通常是宏
+                    '*_RETURN*', '*_CHECK*', 'OFFSET_*', 'GET_*',
+                    'MSGLEN_*', 'SET_*', 'RESET_*', 'CLEAR_*'
+                ]
+            },
             'custom_exclusions': {
                 'patterns': []
             }
@@ -68,6 +76,27 @@ class ExternalFunctionClassifier:
                 return True
         return False
 
+    def _is_likely_macro(self, func_name: str) -> bool:
+        """
+        判断是否可能是宏定义
+
+        规则：
+        1. 全大写且包含下划线（如 GET_DOPRA_MSG_LEN）
+        2. 匹配宏模式
+        """
+        # 检查是否全大写（允许下划线和数字）
+        is_all_caps = func_name.replace('_', '').replace('0', '').replace('1', '').replace('2', '').replace('3', '').replace('4', '').replace('5', '').replace('6', '').replace('7', '').replace('8', '').replace('9', '').isupper()
+
+        # 全大写且至少有一个下划线
+        if is_all_caps and '_' in func_name:
+            return True
+
+        # 匹配宏模式
+        if self._matches_patterns(func_name, self.macro_patterns):
+            return True
+
+        return False
+
     def classify(self, external_functions: Set[str]) -> Dict[str, Set[str]]:
         """
         分类外部函数
@@ -76,21 +105,26 @@ class ExternalFunctionClassifier:
             external_functions: 外部函数名称集合
 
         Returns:
-            Dict包含三个分类：
+            Dict包含四个分类：
             - 'business': 业务外部依赖（需要Mock）
             - 'standard_library': 标准库函数（通常不需要Mock）
             - 'logging_utility': 日志/工具函数（可选Mock）
+            - 'macros': 宏定义（不需要Mock）
         """
         result = {
             'business': set(),
             'standard_library': set(),
-            'logging_utility': set()
+            'logging_utility': set(),
+            'macros': set()
         }
 
         for func in external_functions:
-            # 优先级：custom_exclusions > standard_library > logging_utility > business
+            # 优先级：macros > custom_exclusions > standard_library > logging_utility > business
 
-            if self._matches_patterns(func, self.custom_exclusions):
+            if self._is_likely_macro(func):
+                # 宏定义，不需要Mock
+                result['macros'].add(func)
+            elif self._matches_patterns(func, self.custom_exclusions):
                 # 用户自定义排除的，根据配置归类
                 # 默认归入logging_utility（因为通常是项目特定的工具函数）
                 result['logging_utility'].add(func)
@@ -110,6 +144,7 @@ class ExternalFunctionClassifier:
         lines.append("当前外部函数分类配置：")
         lines.append(f"  标准库模式: {len(self.standard_lib_patterns)} 个")
         lines.append(f"  日志工具模式: {len(self.logging_patterns)} 个")
+        lines.append(f"  宏定义模式: {len(self.macro_patterns)} 个")
         lines.append(f"  自定义排除: {len(self.custom_exclusions)} 个")
         return "\n".join(lines)
 
@@ -127,21 +162,28 @@ def format_classified_externals(classified: Dict[str, Set[str]]) -> str:
     lines = []
 
     # 业务外部依赖（最重要，放最前面）
-    if classified['business']:
+    if classified.get('business'):
         lines.append(f"业务外部依赖（需要Mock）: {len(classified['business'])} 个")
         for func in sorted(classified['business']):
             lines.append(f"- {func}")
         lines.append("")
 
+    # 宏定义
+    if classified.get('macros'):
+        lines.append(f"宏定义（不需要Mock）: {len(classified['macros'])} 个")
+        for func in sorted(classified['macros']):
+            lines.append(f"- {func}")
+        lines.append("")
+
     # 日志/工具函数
-    if classified['logging_utility']:
+    if classified.get('logging_utility'):
         lines.append(f"日志/工具函数（可选Mock）: {len(classified['logging_utility'])} 个")
         for func in sorted(classified['logging_utility']):
             lines.append(f"- {func}")
         lines.append("")
 
     # 标准库函数
-    if classified['standard_library']:
+    if classified.get('standard_library'):
         lines.append(f"标准库函数（通常不需要Mock）: {len(classified['standard_library'])} 个")
         for func in sorted(classified['standard_library']):
             lines.append(f"- {func}")

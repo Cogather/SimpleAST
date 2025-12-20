@@ -81,13 +81,15 @@ class StructureSearcher:
         return [
             # 优先级1: 最精确 - typedef struct _Name 或 struct Name {
             (1, [
-                rf'typedef\s+struct\s+\w*{name}',  # typedef struct _Name 或 typedef struct Name
+                # 支持常见前缀: _ __ tag_ s_ st_ 或无前缀，确保精确匹配
+                rf'typedef\s+struct\s+(_{{1,2}}|tag_|s_|st_)?{name}\b',  # typedef struct [前缀]Name (精确匹配)
                 rf'(struct|class)\s+{name}\s*\{{',  # struct Name {
             ]),
 
             # 优先级2: typedef 结尾形式（} Name;）
             (2, [
-                rf'\}}\s*\w*,?\s*{name}\s*;',  # } MSG_CB, Name; 或 } Name;
+                # 修复: 确保 Name 后面紧跟分号或逗号，避免部分匹配
+                rf'\}}\s*\w*,?\s*{name}\b\s*[;,]',  # } MSG_CB, Name; 或 } Name;
             ]),
 
             # 优先级3: 单行 typedef 或 using

@@ -198,15 +198,10 @@ class FunctionReporter:
             lines.append("\n[全局变量]")
             for var_name in sorted(global_vars.keys()):
                 info = global_vars[var_name]
-                operations = ', '.join(info['operations'])
-                locations = ', '.join([f"行{loc}" for loc in info['locations'][:5]])  # 最多显示5个位置
-
-                if len(info['locations']) > 5:
-                    locations += f" ... (共{len(info['locations'])}处)"
-
                 lines.append(f"  {var_name}:")
-                lines.append(f"    操作: {operations}")
-                lines.append(f"    位置: {locations}")
+                lines.append(f"    类型: {info['type']}")
+                lines.append(f"    定义: {info['definition']}")
+                lines.append(f"    位置: {info['file']}:{info['line']}")
 
         return "\n".join(lines)
 

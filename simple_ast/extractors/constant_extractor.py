@@ -121,11 +121,17 @@ class ConstantExtractor:
             else:
                 file_path = Path(target_file)
 
+            logger.debug(f"[常量提取-函数体] 尝试读取文件: {file_path}")
+
             if not file_path.exists():
+                logger.warning(f"[常量提取-函数体] 文件不存在: {file_path}")
+                logger.warning(f"[常量提取-函数体] project_root={self.project_root}, target_file={target_file}")
                 return identifiers
 
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
+
+            logger.debug(f"[常量提取-函数体] 文件读取成功，大小: {len(content)} 字符")
 
             # 使用tree-sitter解析
             from ..cpp_parser import CppParser
@@ -133,19 +139,27 @@ class ConstantExtractor:
             tree = parser.parse_file(str(file_path))
 
             if not tree:
+                logger.warning(f"[常量提取-函数体] tree-sitter解析失败: {file_path}")
                 return identifiers
+
+            logger.debug(f"[常量提取-函数体] tree-sitter解析成功")
 
             # 查找目标函数
             func_defs = CppParser.find_nodes_by_type(tree.root_node, 'function_definition')
+            logger.debug(f"[常量提取-函数体] 文件中共有 {len(func_defs)} 个函数")
+
             target_func = None
 
             for func_def in func_defs:
                 name = CppParser.get_function_name(func_def, content.encode())
                 if name == func_name:
                     target_func = func_def
+                    logger.debug(f"[常量提取-函数体] ✓ 找到目标函数: {func_name}")
                     break
 
             if not target_func:
+                logger.warning(f"[常量提取-函数体] 未找到目标函数: {func_name}")
+                logger.warning(f"[常量提取-函数体] 文件中的函数: {[CppParser.get_function_name(f, content.encode()) for f in func_defs[:5]]}")
                 return identifiers
 
             # 从函数体中提取所有标识符
@@ -154,8 +168,12 @@ class ConstantExtractor:
             upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', func_text)
             identifiers.update(upper_ids)
 
+            logger.debug(f"[常量提取-函数体] ✓ 从函数体提取到 {len(upper_ids)} 个大写标识符")
+
         except Exception as e:
-            logger.error(f"[常量提取] 从函数体提取失败: {e}")
+            logger.error(f"[常量提取-函数体] 提取失败: {e}")
+            import traceback
+            logger.error(f"[常量提取-函数体] 堆栈: {traceback.format_exc()}")
 
         return identifiers
 

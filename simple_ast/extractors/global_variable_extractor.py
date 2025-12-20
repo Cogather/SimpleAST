@@ -6,6 +6,7 @@
 - 可能需要Mock
 - 影响函数行为
 """
+import re
 from typing import Set, Dict, List, Optional
 from pathlib import Path
 from ..cpp_parser import CppParser
@@ -38,9 +39,10 @@ class GlobalVariableExtractor:
         Returns:
             Dict: {
                 'variable_name': {
-                    'operations': ['read', 'write'],  # 操作类型
-                    'locations': [10, 15, 20],  # 使用位置（行号）
-                    'is_likely_global': True  # 是否可能是全局变量
+                    'definition': 'DIAM_BOOL g_StringFailedAvp = DIAM_FALSE;',  # 变量定义
+                    'type': 'DIAM_BOOL',  # 类型
+                    'file': 'diamadapt.cpp',  # 定义文件
+                    'line': 123  # 定义行号
                 }
             }
         """
@@ -76,25 +78,35 @@ class GlobalVariableExtractor:
         logger.info(f"[全局变量提取] 分析函数: {function_name}")
 
         # 提取全局变量访问
-        global_vars = {}
-        self._extract_global_variables(target_func_node, source_code, global_vars)
+        global_var_names = set()
+        self._extract_global_variable_names(target_func_node, source_code, global_var_names)
 
-        logger.info(f"[全局变量提取] 找到 {len(global_vars)} 个可能的全局变量")
+        if not global_var_names:
+            logger.info(f"[全局变量提取] 未找到全局变量")
+            return {}
+
+        # 搜索全局变量定义
+        global_vars = {}
+        from pathlib import Path
+        project_root = Path(file_path).parent
+        for var_name in global_var_names:
+            definition_info = self._search_variable_definition(var_name, project_root)
+            if definition_info:
+                global_vars[var_name] = definition_info
+
+        logger.info(f"[全局变量提取] 找到 {len(global_vars)} 个全局变量定义")
         return global_vars
 
-    def _extract_global_variables(
+    def _extract_global_variable_names(
         self,
         func_node,
         source_code: bytes,
-        global_vars: Dict[str, Dict]
+        global_var_names: Set[str]
     ):
         """
-        从函数节点中提取全局变量
+        从函数节点中提取全局变量名
 
-        全局变量识别规则：
-        1. 以 g_ 或 G_ 开头（常见命名约定）
-        2. 全大写且包含下划线（如 MAX_SIZE）
-        3. 不是局部变量声明
+        只提取符合全局变量命名规范的标识符
         """
         # 查找所有标识符
         identifiers = CppParser.find_nodes_by_type(func_node, 'identifier')
@@ -105,33 +117,76 @@ class GlobalVariableExtractor:
 
         for identifier in identifiers:
             var_name = CppParser.get_node_text(identifier, source_code)
-            line_num = identifier.start_point[0] + 1
 
             # 跳过局部变量
             if var_name in local_vars:
                 continue
 
             # 检查是否符合全局变量命名规则
-            if not self._is_likely_global_variable(var_name):
-                continue
+            if self._is_likely_global_variable(var_name):
+                global_var_names.add(var_name)
 
-            # 初始化变量信息
-            if var_name not in global_vars:
-                global_vars[var_name] = {
-                    'operations': set(),
-                    'locations': [],
-                    'is_likely_global': True
-                }
+    def _search_variable_definition(self, var_name: str, project_root: Path) -> Optional[Dict]:
+        """
+        搜索全局变量定义
 
-            # 判断操作类型（读还是写）
-            operation = self._determine_operation(identifier, source_code)
-            global_vars[var_name]['operations'].add(operation)
-            global_vars[var_name]['locations'].append(line_num)
+        Args:
+            var_name: 变量名
+            project_root: 项目根目录
 
-        # 转换set为list（用于JSON序列化）
-        for var_name in global_vars:
-            global_vars[var_name]['operations'] = sorted(list(global_vars[var_name]['operations']))
-            global_vars[var_name]['locations'] = sorted(list(set(global_vars[var_name]['locations'])))
+        Returns:
+            Dict包含：definition, type, file, line
+        """
+        from ..searchers import GrepSearcher
+
+        grep = GrepSearcher(str(project_root))
+
+        # 搜索变量定义模式：Type var_name = ...;
+        # 或者 Type var_name;
+        pattern = rf'\b\w+\s+{re.escape(var_name)}\s*(=|;)'
+
+        results = grep.search_content(
+            pattern=pattern,
+            file_glob='*.cpp',
+            max_results=5
+        )
+
+        if not results:
+            # 尝试在头文件中搜索
+            results = grep.search_content(
+                pattern=pattern,
+                file_glob='*.h',
+                max_results=5
+            )
+
+        if not results:
+            logger.info(f"[全局变量提取] 未找到 {var_name} 的定义")
+            return None
+
+        # 取第一个结果
+        file_path, line_num, line_content = results[0]
+
+        # 提取类型
+        var_type = self._extract_type_from_declaration(line_content, var_name)
+
+        return {
+            'definition': line_content.strip(),
+            'type': var_type or '未知',
+            'file': file_path.name,
+            'line': line_num
+        }
+
+    def _extract_type_from_declaration(self, declaration: str, var_name: str) -> Optional[str]:
+        """从声明中提取类型"""
+        # 简单的类型提取：找到 var_name 之前的部分
+        # Type var_name = ...
+        pattern = rf'(\w+(?:\s*\*)?)\s+{re.escape(var_name)}\b'
+        match = re.search(pattern, declaration)
+
+        if match:
+            return match.group(1).strip()
+
+        return None
 
     def _get_local_variables(self, func_node, source_code: bytes) -> Set[str]:
         """
@@ -197,102 +252,33 @@ class GlobalVariableExtractor:
         判断是否可能是全局变量
 
         规则：
-        1. 以 g_ 或 G_ 或 s_ (static) 开头 → 全局变量
-        2. 全大写且包含下划线 → 可能是全局常量，但需要排除宏
-        3. 排除常见的宏模式
+        1. 以 g_ 或 G_ 开头 → 全局变量（最可靠）
+        2. 排除所有大写的标识符（常量/宏）
+        3. 排除预编译宏标识符（以_开头结尾）
         """
-        # 规则1: 命名约定 - g_, G_, s_, S_ 前缀（最可靠）
-        if var_name.startswith(('g_', 'G_', 's_', 'S_')):
+        # 规则1: 命名约定 - g_, G_ 前缀（最可靠）
+        if var_name.startswith(('g_', 'G_')):
             return True
 
-        # 排除明显的宏模式（这些应该在[常量定义]中处理）
+        # 规则2: 排除全大写（常量/枚举/宏）
+        if var_name.isupper():
+            return False
+
+        # 规则3: 排除预编译宏模式 _XXX_
+        if var_name.startswith('_') and var_name.endswith('_'):
+            return False
+
+        # 规则4: 排除常见的宏模式
         macro_patterns = [
             'GET_', 'SET_', 'RESET_', 'CLEAR_',
             'OFFSET_', 'MSGLEN_', '_CHECK', '_RETURN',
             '_LOG', 'LOG_', 'PRINT_', 'TRACE_',
-            'DIAM_FALSE', 'DIAM_TRUE', 'VOS_NULL', 'NULL_'
         ]
 
         for pattern in macro_patterns:
             if pattern in var_name:
                 return False
 
-        # 规则2: 全大写+下划线（可能是全局常量）
-        # 但只接受特定长度，排除太长的（通常是宏）
-        if '_' in var_name and len(var_name) <= 30:
-            # 检查是否全大写
-            name_without_underscore = var_name.replace('_', '')
-            if name_without_underscore.replace('0', '').replace('1', '').replace('2', '').replace('3', '').replace('4', '').replace('5', '').replace('6', '').replace('7', '').replace('8', '').replace('9', '').isupper():
-                # 进一步检查：全局常量通常是 XXX_YYY 形式
-                # 但不是 PID_XXX, DIAM_XXX 这种枚举值
-                if not var_name.startswith(('PID_', 'DIAM_', 'VOS_', 'ERR_', 'MSG_')):
-                    return True
-
+        # 其他情况不认为是全局变量
+        # 因为C++的全局变量应该有明确的命名规范
         return False
-
-    def _determine_operation(self, identifier_node, source_code: bytes) -> str:
-        """
-        判断对变量的操作类型
-
-        Returns:
-            'read' | 'write' | 'read_write'
-        """
-        # 检查父节点类型
-        parent = identifier_node.parent
-
-        if not parent:
-            return 'read'
-
-        # 赋值表达式左侧 = 写操作
-        if parent.type == 'assignment_expression':
-            left = parent.child_by_field_name('left')
-            if left and self._contains_node(left, identifier_node):
-                return 'write'
-
-        # 自增/自减 = 读写
-        if parent.type in ('update_expression', 'compound_literal_expression'):
-            return 'read_write'
-
-        # 默认为读操作
-        return 'read'
-
-    def _contains_node(self, parent, target_node) -> bool:
-        """检查parent是否包含target_node"""
-        if parent == target_node:
-            return True
-
-        for child in parent.children:
-            if self._contains_node(child, target_node):
-                return True
-
-        return False
-
-    def format_global_variables(self, global_vars: Dict[str, Dict]) -> str:
-        """
-        格式化全局变量信息为可读文本
-
-        Args:
-            global_vars: extract_from_function返回的结果
-
-        Returns:
-            格式化的文本
-        """
-        if not global_vars:
-            return ""
-
-        lines = []
-        lines.append("[全局变量]")
-
-        for var_name in sorted(global_vars.keys()):
-            info = global_vars[var_name]
-            operations = ', '.join(info['operations'])
-            locations = ', '.join([f"行{loc}" for loc in info['locations'][:5]])  # 最多显示5个位置
-
-            if len(info['locations']) > 5:
-                locations += f" ... (共{len(info['locations'])}处)"
-
-            lines.append(f"  {var_name}:")
-            lines.append(f"    操作: {operations}")
-            lines.append(f"    位置: {locations}")
-
-        return "\n".join(lines)

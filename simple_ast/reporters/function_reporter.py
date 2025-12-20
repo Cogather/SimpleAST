@@ -38,7 +38,11 @@ class FunctionReporter:
 
         # 创建提取器
         header_searcher = HeaderSearcher()
-        self.constant_extractor = ConstantExtractor(header_searcher, project_root=project_root)
+        self.constant_extractor = ConstantExtractor(
+            header_searcher,
+            project_root=project_root,
+            file_boundary=result.file_boundary  # 传递file_boundary以复用AST
+        )
         self.signature_extractor = SignatureExtractor(header_searcher)
 
         # StructureExtractor 使用全局搜索

@@ -17,10 +17,11 @@ class ConstantExtractor:
     """常量提取器 - 简单实用"""
 
     def __init__(self, header_searcher: Optional[HeaderSearcher] = None,
-                 project_root: Optional[str] = None):
+                 project_root: Optional[str] = None, file_boundary=None):
         self.header_searcher = header_searcher or HeaderSearcher()
         self.project_root = project_root
         self.grep_searcher = GrepSearcher(project_root) if project_root else None
+        self.file_boundary = file_boundary  # 用于复用已解析的AST
 
     def extract(self, func_name: str, function_signatures: Dict[str, str],
                 branch_analyses: Dict, target_file: str) -> Dict[str, str]:
@@ -114,6 +115,33 @@ class ConstantExtractor:
         identifiers = set()
 
         try:
+            # 优先使用 file_boundary 中已解析的函数信息（避免重复解析大文件）
+            if self.file_boundary and hasattr(self.file_boundary, 'file_functions'):
+                if func_name in self.file_boundary.file_functions:
+                    func_info = self.file_boundary.file_functions[func_name]
+                    func_node = func_info.get('node')
+                    source_code = self.file_boundary.source_code
+
+                    if func_node and source_code:
+                        logger.debug(f"[常量提取-函数体] ✓ 使用已解析的函数节点: {func_name}")
+
+                        # 从函数体中提取所有标识符
+                        from ..cpp_parser import CppParser
+                        func_text = CppParser.get_node_text(func_node, source_code)
+                        # 只提取全大写的标识符（可能是宏或常量）
+                        upper_ids = re.findall(r'\b[A-Z][A-Z0-9_]+\b', func_text)
+                        identifiers.update(upper_ids)
+
+                        logger.debug(f"[常量提取-函数体] ✓ 从函数体提取到 {len(upper_ids)} 个大写标识符")
+                        return identifiers
+                    else:
+                        logger.warning(f"[常量提取-函数体] file_boundary中缺少函数节点或源代码")
+                else:
+                    logger.warning(f"[常量提取-函数体] file_boundary中未找到函数: {func_name}")
+
+            # 降级方案：重新读取和解析文件（大文件可能失败）
+            logger.debug(f"[常量提取-函数体] 降级到重新解析文件模式")
+
             # 读取源文件
             from pathlib import Path
             if self.project_root:

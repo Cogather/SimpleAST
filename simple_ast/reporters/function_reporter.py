@@ -12,7 +12,7 @@
 """
 import sys
 from typing import Dict, List, Set, Optional
-from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor
+from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor
 from ..searchers import HeaderSearcher
 from ..logger import get_logger
 logger = get_logger()
@@ -41,6 +41,9 @@ class FunctionReporter:
 
         # StructureExtractor 使用全局搜索
         self.structure_extractor = StructureExtractor(project_root=project_root)
+
+        # MacroExtractor 用于宏展开
+        self.macro_extractor = MacroExtractor(project_root=project_root)
 
     def generate(self, func_name: str) -> str:
         """
@@ -76,6 +79,23 @@ class FunctionReporter:
                 if const_def:
                     lines.append(f"{const_name}: {const_def}")
 
+                    # 如果是函数宏（包含括号），尝试展开完整定义
+                    if '(' in const_name or self.macro_extractor.is_likely_macro(const_name):
+                        macro_expansion = self.macro_extractor.extract_macro_definition(
+                            const_name,
+                            self.result.target_file
+                        )
+                        if macro_expansion and len(macro_expansion) > len(const_def) + 20:
+                            # 只有当展开内容显著更长时才显示（避免重复）
+                            # 多行宏需要格式化
+                            if '\n' in macro_expansion:
+                                lines.append(f"  /* 宏展开: */")
+                                for line in macro_expansion.split('\n'):
+                                    lines.append(f"  {line}")
+                            else:
+                                lines.append(f"  /* 宏展开: {macro_expansion} */")
+                            logger.info(f"[宏展开输出] {const_name}: 已展开")
+
         # 统一展示数据结构定义章节
         if all_data_structures:
             lines.append("\n[数据结构]")
@@ -92,7 +112,10 @@ class FunctionReporter:
                         ds in self.result.file_boundary.file_data_structures):
                         ds_info = self.result.file_boundary.file_data_structures[ds]
                         lines.append(f"\n{ds} ({ds_info['type']}, 内部 {self.result.target_file}:{ds_info['line']}):")
-                        lines.append(ds_info['definition'])
+
+                        # 展开定义中的宏
+                        definition = self._expand_macros_in_definition(ds_info['definition'])
+                        lines.append(definition)
                     else:
                         lines.append(f"\n{ds} (内部)")
 
@@ -102,6 +125,9 @@ class FunctionReporter:
                     definition = self.structure_extractor.extract(ds, self.result.target_file)
                     if definition:
                         lines.append(f"\n{ds} (外部):")
+
+                        # 展开定义中的宏
+                        definition = self._expand_macros_in_definition(definition)
                         lines.append(definition)
 
         return "\n".join(lines)
@@ -447,4 +473,52 @@ class FunctionReporter:
         logger.debug(f"[函数体类型提取] 从函数体提取到 {len(types)} 个类型: {sorted(types)}")
 
         return types
+
+    def _expand_macros_in_definition(self, definition: str) -> str:
+        """
+        展开数据结构定义中的宏
+
+        Args:
+            definition: 原始数据结构定义
+
+        Returns:
+            展开宏后的定义
+        """
+        import re
+
+        lines = definition.split('\n')
+        result_lines = []
+
+        for line in lines:
+            # 检查是否有独立的宏标识符（全大写+下划线）
+            # 匹配类似 "    VOS_MSG_HEADER" 或 "    VOS_MSG_HEADER  /* comment */"
+            match = re.match(r'^(\s*)([A-Z][A-Z0-9_]+)\s*(\/\*.*\*\/)?$', line.strip())
+            if match:
+                indent = re.match(r'^(\s*)', line).group(1)  # 保留原缩进
+                macro_name = match.group(2)
+                comment = match.group(3) or ''  # 保留注释
+
+                logger.debug(f"[宏展开] 检测到结构体宏: {macro_name}")
+
+                # 尝试展开这个宏
+                expansion = self.macro_extractor.extract_struct_macro(macro_name)
+                if expansion:
+                    # 添加注释标记
+                    result_lines.append(f"{indent}/* {macro_name} 展开: */")
+                    # 添加展开内容（保持原缩进）
+                    for exp_line in expansion.split('\n'):
+                        result_lines.append(f"{indent}{exp_line}")
+                    # 如果原行有注释，也保留
+                    if comment:
+                        result_lines.append(f"{indent}{comment}")
+                    logger.info(f"[宏展开] ✓ {macro_name}: 已展开到结构体定义中")
+                else:
+                    # 未找到展开，保留原行
+                    result_lines.append(line)
+                    logger.debug(f"[宏展开] ✗ {macro_name}: 未找到定义")
+            else:
+                # 普通行，直接保留
+                result_lines.append(line)
+
+        return '\n'.join(result_lines)
 

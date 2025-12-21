@@ -14,7 +14,7 @@
 """
 import sys
 from typing import Dict, List, Set, Optional
-from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor, GlobalVariableExtractor, TypeCastExtractor
+from ..extractors import ConstantExtractor, SignatureExtractor, StructureExtractor, MacroExtractor, GlobalVariableExtractor, TypeCastExtractor, FunctionImplExtractor
 from ..searchers import HeaderSearcher
 from ..logger import get_logger
 logger = get_logger()
@@ -57,6 +57,9 @@ class FunctionReporter:
         # TypeCastExtractor 用于类型转换提取
         self.type_cast_extractor = TypeCastExtractor()
 
+        # FunctionImplExtractor 用于函数实现提取
+        self.impl_extractor = FunctionImplExtractor(project_root=project_root)
+
     def generate(self, func_name: str) -> str:
         """
         生成单个函数的完整测试上下文报告
@@ -71,6 +74,25 @@ class FunctionReporter:
         visited = set()
         all_data_structures = set()
         all_external_funcs = set()
+
+        # === 提取并展示函数实现（放在最前面） ===
+        func_impl = self.impl_extractor.extract(
+            func_name,
+            self.result.target_file,
+            self.result.file_boundary
+        )
+
+        if func_impl:
+            lines.append("=" * 80)
+            lines.append(f"[函数实现] {func_name}")
+            lines.append("=" * 80)
+            lines.append(func_impl)
+            lines.append("")
+            lines.append("=" * 80)
+            lines.append("[分析信息]")
+            lines.append("=" * 80)
+        else:
+            logger.warning(f"[函数实现] 未能提取 {func_name} 的实现代码")
 
         # 递归生成主函数及其所有内部依赖
         self._generate_recursive_function_info(
@@ -219,10 +241,26 @@ class FunctionReporter:
         indent = "  " * depth
         logger.info(f"{indent}[递归展开] 处理函数: {func_name} (层级: {number_prefix or '主函数'})")
 
-        # === 1. 函数签名 ===
-        # 判断是否是内部函数（有序号前缀说明是内部依赖）
+        # === 1. 提取函数实现（对于内部依赖函数） ===
         is_internal_dep = bool(number_prefix)
+        if is_internal_dep:
+            func_impl = self.impl_extractor.extract(
+                func_name,
+                self.result.target_file,
+                self.result.file_boundary
+            )
+            if func_impl:
+                lines.append("")
+                lines.append("=" * 80)
+                lines.append(f"[函数实现] {func_name}")
+                lines.append("=" * 80)
+                lines.append(func_impl)
+                lines.append("")
+                lines.append("=" * 80)
+                lines.append("[分析信息]")
+                lines.append("=" * 80)
 
+        # === 2. 函数签名 ===
         if number_prefix:
             # 内部依赖函数：添加 [内部] 标记
             lines.append(f"\n{number_prefix} {func_name} [内部]")

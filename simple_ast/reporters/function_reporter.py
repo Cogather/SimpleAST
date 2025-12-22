@@ -60,6 +60,107 @@ class FunctionReporter:
         # FunctionImplExtractor 用于函数实现提取
         self.impl_extractor = FunctionImplExtractor(project_root=project_root)
 
+        # 构建函数暴露状态映射 {函数名: (category, declaration_location)}
+        # 使用 file_boundary 中的所有函数信息，而不只是 entry_points（可能被过滤）
+        self.function_exposure_map = {}
+        self._build_complete_exposure_map()
+
+    def _build_complete_exposure_map(self):
+        """
+        构建完整的函数暴露状态映射，包含文件中的所有函数
+
+        这个方法复刻了 SingleFileAnalyzer.get_entry_points() 的分类逻辑
+        """
+        # 优先使用 entry_points（如果有完整的）
+        if hasattr(self.result, 'entry_points') and self.result.entry_points:
+            for ep in self.result.entry_points:
+                self.function_exposure_map[ep.name] = (ep.category, ep.declaration_location)
+
+        # 如果 file_boundary 中有更多函数信息，补充到映射中
+        if (hasattr(self.result, 'file_boundary') and self.result.file_boundary and
+            hasattr(self.result.file_boundary, 'file_functions') and self.result.file_boundary.file_functions):
+
+            from pathlib import Path
+
+            # 查找对应的头文件中的函数声明
+            target_file_path = Path(self.result.project_root) / self.result.target_file
+            header_functions = self._find_header_declarations(str(target_file_path))
+
+            # 为每个函数分类
+            for func_name, func_info in self.result.file_boundary.file_functions.items():
+                # 如果已经在映射中，跳过
+                if func_name in self.function_exposure_map:
+                    continue
+
+                is_static = func_info.get('is_static', False)
+
+                # 分类逻辑（与 SingleFileAnalyzer.get_entry_points() 一致）
+                if is_static:
+                    category = 'INTERNAL'
+                    decl_location = ""
+                elif func_name in header_functions:
+                    category = 'API'
+                    decl_location = header_functions[func_name]
+                else:
+                    category = 'EXPORTED'
+                    decl_location = ""
+
+                self.function_exposure_map[func_name] = (category, decl_location)
+                logger.info(f"[暴露状态映射] {func_name}: {category}")
+
+    def _find_header_declarations(self, cpp_file_path: str) -> dict:
+        """
+        查找cpp文件对应的头文件中的函数声明
+        使用简单的文本搜索
+        """
+        from pathlib import Path
+
+        header_funcs = {}
+        cpp_path = Path(cpp_file_path)
+
+        if not cpp_path.is_absolute():
+            cpp_path = cpp_path.resolve()
+
+        possible_headers = [
+            cpp_path.with_suffix('.h'),
+            cpp_path.with_suffix('.hpp'),
+        ]
+
+        # 获取要搜索的函数列表
+        search_functions = set()
+        if (hasattr(self.result, 'file_boundary') and self.result.file_boundary and
+            hasattr(self.result.file_boundary, 'file_functions')):
+            search_functions = set(self.result.file_boundary.file_functions.keys())
+
+        for header_path in possible_headers:
+            if header_path.exists():
+                try:
+                    with open(header_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        header_content = f.read()
+
+                    # 简单的文本搜索
+                    for func_name in search_functions:
+                        if func_name in header_content:
+                            for line in header_content.split('\n'):
+                                # 跳过注释行
+                                if line.strip().startswith('//') or line.strip().startswith('/*'):
+                                    continue
+
+                                # 检查行是否包含函数名且看起来像声明
+                                if func_name in line and '(' in line:
+                                    header_funcs[func_name] = str(header_path)
+                                    logger.info(f"[头文件检测] 发现 {func_name} 在 {header_path.name}")
+                                    break
+
+                    if header_funcs:
+                        logger.info(f"[头文件检测] 在 {header_path.name} 中找到 {len(header_funcs)} 个函数声明")
+                    break
+                except Exception as e:
+                    logger.debug(f"[头文件检测] 读取 {header_path} 失败: {e}")
+                    continue
+
+        return header_funcs
+
     def generate(self, func_name: str) -> str:
         """
         生成单个函数的完整测试上下文报告
@@ -226,6 +327,36 @@ class FunctionReporter:
 
         return "\n".join(lines)
 
+    def _get_exposure_info(self, func_name: str) -> str:
+        """
+        获取函数暴露状态信息
+
+        Returns:
+            暴露状态说明字符串
+        """
+        if func_name not in self.function_exposure_map:
+            return ""
+
+        category, decl_location = self.function_exposure_map[func_name]
+
+        if category == 'API':
+            # 在头文件中声明，是公开API
+            if decl_location:
+                # decl_location 是完整路径，提取文件名
+                from pathlib import Path
+                header_file = Path(decl_location).name
+                return f"[已暴露: {header_file}]"
+            else:
+                return "[已暴露: 头文件]"
+        elif category == 'INTERNAL':
+            # 内部函数（static或匿名命名空间）
+            return "[内部函数: static，不可extern]"
+        elif category == 'EXPORTED':
+            # 在cpp中定义但没有在头文件中声明
+            return "[未暴露: 其他文件使用需要extern声明]"
+
+        return ""
+
     def _generate_recursive_function_info(self, func_name: str, lines: List[str],
                                          number_prefix: str, visited: Set[str],
                                          all_data_structures: Set[str],
@@ -277,7 +408,12 @@ class FunctionReporter:
             else:
                 lines.append(sig_part)
 
-        # === 2. 分支复杂度分析（仅当圈复杂度>5时） ===
+        # === 3. 显示函数暴露状态 ===
+        exposure_info = self._get_exposure_info(func_name)
+        if exposure_info:
+            lines.append(exposure_info)
+
+        # === 4. 分支复杂度分析（仅当圈复杂度>5时） ===
         if (hasattr(self.result, 'branch_analyses') and self.result.branch_analyses and
             func_name in self.result.branch_analyses):
             branch_analysis = self.result.branch_analyses[func_name]
@@ -309,7 +445,7 @@ class FunctionReporter:
                                         lines.append(f"         调用: {func_list}")
                                     lines.append(f"         位置: 行{case_info.line_start}-{case_info.line_end}")
 
-        # === 3. 收集直接依赖 ===
+        # === 5. 收集直接依赖 ===
         direct_internal_deps = []
         direct_external_deps = set()
 
@@ -332,7 +468,7 @@ class FunctionReporter:
         else:
             logger.info(f"{indent}[递归展开]   警告: 未找到调用链信息")
 
-        # === 4. Mock清单（仅显示业务外部依赖，并搜索签名） ===
+        # === 6. Mock清单（仅显示业务外部依赖，并搜索签名） ===
         if direct_external_deps:
             # 使用分类器分类外部函数
             classified = self.result.external_classifier.classify(direct_external_deps)
@@ -359,7 +495,7 @@ class FunctionReporter:
         else:
             logger.info(f"{indent}[Mock生成] 无外部依赖")
 
-        # === 5. 数据结构 - 只列出名称，收集到 all_data_structures ===
+        # === 7. 数据结构 - 只列出名称，收集到 all_data_structures ===
         used_data_structures = self._extract_data_structures_from_single_function(func_name)
 
         if used_data_structures:
@@ -368,7 +504,7 @@ class FunctionReporter:
             # 只列出名称
             lines.append(f"数据结构: {', '.join(sorted(used_data_structures.keys()))}")
 
-        # === 6. 递归显示内部依赖函数 ===
+        # === 8. 递归显示内部依赖函数 ===
         if direct_internal_deps:
             # 仅在主函数时添加章节标题
             if not number_prefix:

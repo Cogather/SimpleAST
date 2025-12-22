@@ -2,6 +2,7 @@
 单文件边界分析器 - 深度分析单个文件的完整边界
 不需要全局索引，快速分析大型文件
 """
+import sys
 from pathlib import Path
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
@@ -10,6 +11,9 @@ from .cpp_parser import CppParser
 from .entry_point_classifier import EntryPointInfo
 from .call_chain_tracer import CallNode
 from .data_structure_analyzer import DataStructureInfo
+from .logger import get_logger
+
+logger = get_logger()
 
 
 @dataclass
@@ -152,14 +156,28 @@ class SingleFileAnalyzer:
             signature = CppParser.get_function_signature(func_node, source_code)
             line_number = func_node.start_point[0] + 1
 
+            # 检查是否是static函数
+            is_static = self._is_static_function(func_node, source_code)
+
             self.file_functions[func_name] = {
                 'node': func_node,
                 'signature': signature,
-                'line': line_number
+                'line': line_number,
+                'is_static': is_static
             }
 
             # 标记为内部函数
             self.internal_functions.add(func_name)
+
+    def _is_static_function(self, func_node, source_code: bytes) -> bool:
+        """检查函数是否是static函数"""
+        # 检查函数定义节点的storage_class_specifier子节点
+        for child in func_node.children:
+            if child.type == 'storage_class_specifier':
+                text = CppParser.get_node_text(child, source_code)
+                if text == 'static':
+                    return True
+        return False
 
     def _index_file_data_structures(self, root_node, source_code: bytes):
         """索引文件中定义的所有数据结构"""
@@ -301,20 +319,105 @@ class SingleFileAnalyzer:
         return type_name in std_types
 
     def get_entry_points(self, source_code: bytes, file_path: str) -> List[EntryPointInfo]:
-        """获取入口点函数列表（用于兼容原有接口）"""
+        """
+        获取入口点函数列表
+
+        改进：正确分类函数
+        - INTERNAL: static函数或匿名命�空间中的函数
+        - EXPORTED: 非static的普通函数（可能被其他文件使用）
+        - API: 在对应的.h文件中有声明的函数（需要检查头文件）
+        """
         entry_points = []
 
+        # 尝试找到对应的头文件
+        header_functions = self._find_header_declarations(file_path)
+
         for func_name, func_info in self.file_functions.items():
+            # 判断函数类型
+            is_static = func_info.get('is_static', False)
+            signature = func_info.get('signature', '')
+
+            # 分类逻辑
+            if is_static:
+                category = 'INTERNAL'
+                decl_location = ""
+            elif func_name in header_functions:
+                category = 'API'
+                decl_location = header_functions[func_name]
+            else:
+                category = 'EXPORTED'
+                decl_location = ""
+
             entry_points.append(EntryPointInfo(
                 name=func_name,
-                category='INTERNAL',  # 单文件模式下都是内部函数
+                category=category,
                 file_path=file_path,
                 line_number=func_info['line'],
-                signature=func_info['signature'],
-                declaration_location=None
+                signature=signature,
+                declaration_location=decl_location
             ))
 
         return entry_points
+
+    def _find_header_declarations(self, cpp_file_path: str) -> dict:
+        """
+        查找cpp文件对应的头文件中的函数声明
+        使用简单的文本搜索，不需要AST解析
+
+        Returns:
+            dict: {函数名: 头文件路径}
+        """
+        from pathlib import Path
+
+        header_funcs = {}
+        cpp_path = Path(cpp_file_path)
+
+        # 确保是绝对路径
+        if not cpp_path.is_absolute():
+            cpp_path = cpp_path.resolve()
+
+        # 查找同名的.h文件
+        possible_headers = [
+            cpp_path.with_suffix('.h'),
+            cpp_path.with_suffix('.hpp'),
+        ]
+
+        for header_path in possible_headers:
+            if header_path.exists():
+                try:
+                    # 读取头文件内容（文本模式）
+                    with open(header_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        header_content = f.read()
+
+                    # 对每个文件中的函数名，在头文件中搜索
+                    for func_name in self.file_functions.keys():
+                        # 简单搜索：函数名出现在头文件中
+                        # 排除注释中的出现（简单检查：不在 // 或 /* */ 之后）
+                        if func_name in header_content:
+                            # 更精确的检查：确保是函数声明，不是注释或其他上下文
+                            # 查找包含函数名的行
+                            for line in header_content.split('\n'):
+                                # 跳过注释行
+                                if line.strip().startswith('//') or line.strip().startswith('/*'):
+                                    continue
+
+                                # 检查是否包含函数名，并且看起来像函数声明
+                                # 函数声明通常是：返回类型 函数名(参数);
+                                if func_name in line and '(' in line:
+                                    header_funcs[func_name] = str(header_path)
+                                    logger.info(f"[头文件分析] 发现 {func_name} 在 {header_path}")
+                                    break
+
+                    logger.info(f"[头文件分析] 在 {header_path} 中找到 {len(header_funcs)} 个函数声明")
+                    break  # 找到一个头文件就够了
+
+                except Exception as e:
+                    logger.debug(f"[头文件分析] 读取 {header_path} 失败: {e}")
+                    continue
+
+        return header_funcs
+
+    # 删除不再需要的 _extract_function_name_from_declarator 方法
 
     def trace_call_chain(self, func_name: str, source_code: bytes, max_depth: int = 100) -> Optional[CallNode]:
         """追踪函数调用链（仅在文件内部追踪）"""

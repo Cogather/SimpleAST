@@ -42,6 +42,13 @@ test_output.json
 *.orig
 .cache/
 
+# Temporary scripts (prevent future clutter in root directory)
+# Note: scripts/ directory is tracked, but prevent accidental root scripts
+/test_*.py
+/debug_*.py
+/tmp_*.py
+/temp_*.py
+
 # Compressed files
 *.zip
 *.rar

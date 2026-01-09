@@ -3,7 +3,12 @@ Test script for the C++ analyzer.
 """
 import sys
 import io
-from cpp_analyzer import CppProjectAnalyzer
+import os
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from simple_ast.cpp_analyzer import CppProjectAnalyzer
 
 # Set output encoding to UTF-8 for Windows
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')

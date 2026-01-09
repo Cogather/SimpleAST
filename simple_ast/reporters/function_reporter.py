@@ -230,7 +230,7 @@ class FunctionReporter:
                     logger.info(f"[全局变量] 过滤常量: {const_name}")
 
         if constants:
-            lines.append("\n[常量定义]")
+            lines.append("[常量定义]")
             for const_name, const_def in sorted(constants.items()):
                 if const_def:
                     lines.append(f"{const_name}: {const_def}")
@@ -254,7 +254,7 @@ class FunctionReporter:
 
         # 统一展示数据结构定义章节
         if all_data_structures:
-            lines.append("\n[数据结构]")
+            lines.append("[数据结构]")
 
             # 分类：内部定义 vs 外部引用
             internal_ds = [ds for ds in all_data_structures if ds in self.result.data_structures]
@@ -262,25 +262,32 @@ class FunctionReporter:
 
             # 显示内部定义的数据结构（有完整代码）
             if internal_ds:
-                for ds in sorted(internal_ds):
+                for idx, ds in enumerate(sorted(internal_ds)):
                     if (self.result.file_boundary and
                         hasattr(self.result.file_boundary, 'file_data_structures') and
                         ds in self.result.file_boundary.file_data_structures):
                         ds_info = self.result.file_boundary.file_data_structures[ds]
-                        lines.append(f"\n{ds} ({ds_info['type']}, 内部 {self.result.target_file}:{ds_info['line']}):")
+                        if idx > 0:  # 从第二个开始添加空行
+                            lines.append("")
+                        lines.append(f"{ds} ({ds_info['type']}, 内部 {self.result.target_file}:{ds_info['line']}):")
 
                         # 展开定义中的宏
                         definition = self._expand_macros_in_definition(ds_info['definition'])
                         lines.append(definition)
                     else:
-                        lines.append(f"\n{ds} (内部)")
+                        if idx > 0:
+                            lines.append("")
+                        lines.append(f"{ds} (内部)")
 
             # 尝试从头文件读取外部数据结构
             if external_ds:
-                for ds in sorted(external_ds):
+                start_idx = len(internal_ds) if internal_ds else 0  # 如果有内部结构，继续计数
+                for idx, ds in enumerate(sorted(external_ds), start=start_idx):
                     definition = self.structure_extractor.extract(ds, self.result.target_file)
                     if definition:
-                        lines.append(f"\n{ds} (外部):")
+                        if idx > 0:  # 从第二个开始添加空行
+                            lines.append("")
+                        lines.append(f"{ds} (外部):")
 
                         # 展开定义中的宏
                         definition = self._expand_macros_in_definition(definition)
@@ -288,7 +295,7 @@ class FunctionReporter:
 
         # 显示类型转换关系（如果有）
         if type_casts and type_casts.get('casts'):
-            lines.append("\n[类型转换关系]")
+            lines.append("[类型转换关系]")
 
             # 按源变量分组
             source_groups = {}
@@ -317,7 +324,7 @@ class FunctionReporter:
 
         # 显示全局变量（如果有）
         if global_vars:
-            lines.append("\n[全局变量]")
+            lines.append("[全局变量]")
             for var_name in sorted(global_vars.keys()):
                 info = global_vars[var_name]
                 lines.append(f"  {var_name}:")
@@ -508,7 +515,7 @@ class FunctionReporter:
         if direct_internal_deps:
             # 仅在主函数时添加章节标题
             if not number_prefix:
-                lines.append("\n[内部依赖函数] (同文件定义,不需要Mock)")
+                lines.append("[内部依赖函数] (同文件定义,不需要Mock)")
 
             for idx, dep_func in enumerate(direct_internal_deps, start=1):
                 # 生成序号前缀

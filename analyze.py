@@ -210,7 +210,7 @@ def main():
             with open(boundary_file, 'w', encoding='utf-8') as f:
                 f.write(result.generate_boundary_report())
 
-            # 3. 生成每个函数的独立文件
+            # 3. 生成每个函数的独立文件（按源码路径组织）
             functions_dir = result_dir / "functions"
             functions_dir.mkdir(exist_ok=True)
 
@@ -234,13 +234,83 @@ def main():
                 all_functions = sorted(result.file_boundary.internal_functions) if result.file_boundary else sorted(result.function_signatures.keys())
                 log(f"  - 生成 {len(all_functions)} 个函数文件到: {functions_dir}/")
 
+            # 构建函数名到源文件路径的映射
+            func_to_source_path = {}
+            for func_name in all_functions:
+                # 从调用链中获取函数的源文件路径
+                if func_name in result.call_chains:
+                    call_node = result.call_chains[func_name]
+                    if call_node and call_node.file_path:
+                        func_to_source_path[func_name] = call_node.file_path
+
+                # 如果调用链中没有，尝试从函数签名中提取
+                if func_name not in func_to_source_path and func_name in result.function_signatures:
+                    sig = result.function_signatures[func_name]
+                    # 签名格式: "signature // file_path:line_number"
+                    if '//' in sig:
+                        location = sig.split('//')[-1].strip()
+                        if ':' in location:
+                            file_path = location.split(':')[0].strip()
+                            func_to_source_path[func_name] = file_path
+
             for idx, func_name in enumerate(all_functions, 1):
-                func_file = functions_dir / f"{func_name}.txt"
+                # 获取函数的源文件路径
+                source_file_path = func_to_source_path.get(func_name, "")
+
+                if source_file_path:
+                    # 计算相对于项目根目录的路径
+                    try:
+                        # 规范化路径分隔符（处理Windows路径）
+                        normalized_path = source_file_path.replace('\\', '/')
+                        source_path = Path(normalized_path)
+
+                        # 尝试提取相对路径
+                        # 1. 如果路径包含项目根目录名称，提取相对部分
+                        project_name = Path(project_root).name
+                        if project_name in normalized_path:
+                            # 找到项目名称后的路径部分
+                            parts = normalized_path.split(project_name)
+                            if len(parts) > 1:
+                                rel_path_str = parts[-1].lstrip('/')
+                                rel_path = Path(rel_path_str)
+                            else:
+                                rel_path = source_path
+                        # 2. 如果是绝对路径，尝试相对于项目根目录
+                        elif source_path.is_absolute():
+                            try:
+                                rel_path = source_path.relative_to(project_root)
+                            except ValueError:
+                                # 如果不在项目根目录下，使用文件名
+                                rel_path = Path(source_path.name)
+                        # 3. 否则直接使用
+                        else:
+                            rel_path = source_path
+
+                        # 获取源文件的目录结构（不包括文件名）
+                        source_dir = rel_path.parent
+
+                        # 获取源文件名（不含扩展名）
+                        source_filename = rel_path.stem  # 例如 imgui_impl_glfw.cpp -> imgui_impl_glfw
+
+                        # 在 functions/ 下创建对应的目录结构：源码目录/文件名/
+                        func_output_dir = functions_dir / source_dir / source_filename
+                        func_output_dir.mkdir(parents=True, exist_ok=True)
+
+                        # 函数文件名：函数名.txt
+                        func_file = func_output_dir / f"{func_name}.txt"
+                    except Exception as e:
+                        # 如果路径处理失败，回退到直接使用函数名
+                        log(f"  警告: 无法处理函数 {func_name} 的路径 {source_file_path}: {e}")
+                        func_file = functions_dir / f"{func_name}.txt"
+                else:
+                    # 如果没有源文件路径信息，直接保存在 functions/ 根目录
+                    func_file = functions_dir / f"{func_name}.txt"
+
                 print(f"\n[文件输出] 生成函数报告 ({idx}/{len(all_functions)}): {func_name}", file=sys.stderr)
                 report = result.generate_single_function_report(func_name)
                 with open(func_file, 'w', encoding='utf-8') as f:
                     f.write(report)
-                print(f"[文件输出] ✓ 写入文件: {func_file.name} ({len(report)} 字符)", file=sys.stderr)
+                print(f"[文件输出] ✓ 写入文件: {func_file.relative_to(result_dir)} ({len(report)} 字符)", file=sys.stderr)
 
             # 4. 生成调用链和数据结构报告（仅在多函数时）
             # 注意：单函数分析时，functions/ 已包含所有信息，无需额外文件
